@@ -8,6 +8,7 @@ from tqdm import tqdm
 from time import time
 from copy import deepcopy
 from peft import PeftModel
+from vllm import LLM, SamplingParams
 from transformers import AutoTokenizer, AutoModelForCausalLM
 
 from eval.utils import generate_completions
@@ -64,49 +65,71 @@ def infer(args, test_data, answer_extraction_fn):
         prompts.append(prompt)
 
     print("Loading model and tokenizer...")
+    if args.use_vllm:
+        if args.use_adapter:
+            model = LLM(model=args.model_path, tokenizer=args.tokenizer_path, trust_remote_code=True, enable_lora=True, tensor_parallel_size=len(os.environ['CUDA_VISIBLE_DEVICES'].split(",")), max_model_len=16000)
+        else:
+            model = LLM(model=args.model_path, tokenizer=args.tokenizer_path, trust_remote_code=True, tensor_parallel_size=len(os.environ['CUDA_VISIBLE_DEVICES'].split(",")))
+            
+        eos_token = tokenizer.eos_token if tokenizer is not None and tokenizer.eos_token is not None else '</s>'
+        stop_words = [eos_token]
+        
+        torch.cuda.synchronize()
+        start_time = time()
+        if args.use_adapter:
+            outputs = model.generate(prompts, SamplingParams(temperature=args.temperature, top_p=1.0, max_tokens=args.max_new_tokens, n=1, stop=stop_words), lora_request=LoRARequest("sql_adapter", 1, args.adapter_path))
+        else:
+            outputs = model.generate(prompts, SamplingParams(temperature=args.temperature, top_p=1.0, max_tokens=args.max_new_tokens, n=1, stop=stop_words))
+        torch.cuda.synchronize()
+        total_time = time() - start_time
+        
+        outputs = sorted(outputs, key=lambda x: int(x.request_id)) # sort outputs by request_id
+        outputs = [output.outputs[0].text for output in outputs]
+    else:
+        tokenizer = AutoTokenizer.from_pretrained(
+            args.tokenizer_path,
+            trust_remote_code=True,
+        )
+        model = AutoModelForCausalLM.from_pretrained(
+            args.model_path,
+            torch_dtype=torch.float16,
+            trust_remote_code=True,
+            device_map="auto",
+        )
 
-    tokenizer = AutoTokenizer.from_pretrained(
-        args.tokenizer_path,
-        trust_remote_code=True,
-    )
-    model = AutoModelForCausalLM.from_pretrained(
-        args.model_path,
-        torch_dtype=torch.float16,
-        trust_remote_code=True,
-        device_map="auto",
-    )
+        if args.use_adapter:
+            model = PeftModel.from_pretrained(model, args.adapter_path, device_map="auto")
+            model = model.merge_and_unload()
 
-    if args.use_adapter:
-        model = PeftModel.from_pretrained(model, args.adapter_path, device_map="auto")
-        model = model.merge_and_unload()
+        # set padding side to left for batch generation
+        tokenizer.padding_side = "left"
+        # set pad token to eos token if pad token is not set (as is the case for llama models)
+        if tokenizer.pad_token is None:
+            tokenizer.pad_token = tokenizer.eos_token
+            tokenizer.pad_token_id = tokenizer.eos_token_id
 
-    # set padding side to left for batch generation
-    tokenizer.padding_side = "left"
-    # set pad token to eos token if pad token is not set (as is the case for llama models)
-    if tokenizer.pad_token is None:
-        tokenizer.pad_token = tokenizer.eos_token
-        tokenizer.pad_token_id = tokenizer.eos_token_id
+        stop_id_sequences = []
+        if tokenizer.eos_token_id is not None:
+            stop_id_sequences = [[tokenizer.eos_token_id]]
+            
+        do_sample = False if args.temperature == 0.0 else True
 
-    stop_id_sequences = []
-    if tokenizer.eos_token_id is not None:
-        stop_id_sequences = [[tokenizer.eos_token_id]]
-
-    torch.cuda.synchronize()
-    start_time = time()
-    outputs, finish_completion = generate_completions(
-        model=model,
-        tokenizer=tokenizer,
-        prompts=prompts,
-        max_new_tokens=args.max_new_tokens,
-        do_sample=False,
-        temperature=args.temperature,
-        top_p=1.0,
-        batch_size=args.eval_batch_size,
-        stop_id_sequences=stop_id_sequences if stop_id_sequences else None,
-        end_of_generation_id_sequence=[tokenizer.eos_token_id] if tokenizer.eos_token_id is not None else None
-    )
-    torch.cuda.synchronize()
-    total_time = time() - start_time
+        torch.cuda.synchronize()
+        start_time = time()
+        outputs, _ = generate_completions(
+            model=model,
+            tokenizer=tokenizer,
+            prompts=prompts,
+            max_new_tokens=args.max_new_tokens,
+            do_sample=do_sample,
+            temperature=args.temperature,
+            top_p=1.0,
+            batch_size=args.eval_batch_size,
+            stop_id_sequences=stop_id_sequences if stop_id_sequences else None,
+            end_of_generation_id_sequence=[tokenizer.eos_token_id] if tokenizer.eos_token_id is not None else None
+        )
+        torch.cuda.synchronize()
+        total_time = time() - start_time
 
     model_outputs = outputs
     cot_lengths = []
@@ -142,6 +165,7 @@ if __name__ == "__main__":
     parser.add_argument("--compression_ratio", type=float, default=1.0, help="compression ratio for cot.")
     parser.add_argument("--benchmark", type=str, choices=['gsm8k', 'math'], default="gsm8k")
     parser.add_argument("--data-type", type=str, choices=['train', 'test'], default="test")
+    parser.add_argument("--use_vllm", action='store_true', default=False, help="whether to use vllm")
 
     parser.add_argument("--max_num_examples", type=int, default=100000000000000, help="maximum number of examples to evaluate.")
     parser.add_argument("--max_new_tokens", type=int, default=512)
