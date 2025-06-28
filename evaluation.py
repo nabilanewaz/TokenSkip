@@ -9,6 +9,7 @@ from time import time
 from copy import deepcopy
 from peft import PeftModel
 from vllm import LLM, SamplingParams
+from vllm.lora.request import LoRARequest
 from transformers import AutoTokenizer, AutoModelForCausalLM
 
 from eval.utils import generate_completions
