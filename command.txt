@@ -8,23 +8,47 @@ pip install --index-url https://download.pytorch.org/whl/cpu torch==2.5.1 torchv
 
 pip install transformers==4.47.0 datasets==3.1.0 accelerate==1.2.1 peft==0.14.0 sentencepiece==0.2.0 sympy antlr4-python3-runtime pebble
 
+pip install hf_transfer
+
 python -c "import torch, torchvision, torchaudio; print('torch', torch.__version__); print('torchvision', torchvision.__version__); print('torchaudio', torchaudio.__version__)"
 
 python patch_eval_cpu_safe.py 
 
+python patch_enforce_compression.py
+
+$env:HF_HUB_ENABLE_HF_TRANSFER = "1"
+
 $env:TRANSFORMERS_NO_TORCHVISION=1
->> $env:OMP_NUM_THREADS=4                                                                      
->> $env:MKL_NUM_THREADS=4
+$env:OMP_NUM_THREADS=4                                                                      
+$env:MKL_NUM_THREADS=4
 
 python .\evaluation.py `
->>   --model-path "Qwen/Qwen2.5-0.5B-Instruct" `                                               
->>   --tokenizer-path "Qwen/Qwen2.5-0.5B-Instruct" `
->>   --model-type qwen `
->>   --benchmark gsm8k `
->>   --data-type test `
->>   --compression_ratio 1.0 `
->>   --max_num_examples 10 `
->>   --max_new_tokens 192 `
->>   --temperature 0.0 
+  --model-path "Qwen/Qwen2.5-0.5B-Instruct" `
+  --tokenizer-path "Qwen/Qwen2.5-0.5B-Instruct" `
+  --model-type qwen `
+  --benchmark gsm8k `
+  --data-type test `
+  --max_num_examples 50 `
+  --max_new_tokens 192 `
+  --temperature 0.0 `
+  --eval_batch_size 2 `
+  --output-dir "outputs/Qwen2.5-0.5B-Instruct/full_cot/"
+
+python .\evaluation.py `
+  --model-path "Qwen/Qwen2.5-0.5B-Instruct" `
+  --tokenizer-path "Qwen/Qwen2.5-0.5B-Instruct" `
+  --model-type qwen `
+  --benchmark gsm8k `
+  --data-type test `
+  --compression_ratio 0.35 `
+  --max_num_examples 50 `
+  --max_new_tokens 192 `
+  --temperature 0.0 `
+  --eval_batch_size 2 `
+  --output-dir "outputs/Qwen2.5-0.5B-Instruct/compressed_cot/"
+
+python .\compare_metrics.py `
+  "outputs/Qwen2.5-0.5B-Instruct/full_cot/" `
+  "outputs/Qwen2.5-0.5B-Instruct/compressed_cot/"
 
 deactivate
