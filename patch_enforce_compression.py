@@ -1,15 +1,12 @@
-# patch_enforce_compression_and_fix_indent.py
+# patch_enforce_compression.py
 """
-Merges the behavior of:
-- patch_enforce_compression.py  (enforce shorter generations when compression_ratio < 1.0 and !use_adapter)
-- patch_fix_indent.py           (safely insert greedy-decoding cleanup block with correct indentation)
+Adds:
+- Enforced shorter generations when compression_ratio < 1.0 (no-LoRA path)
+- Greedy-decoding cleanup in the HF branch
+- Removes compression_ratio tokens from prompt templates (for fair CoT compression)
 
 Usage:
     python patch_enforce_compression_and_fix_indent.py
-
-Notes:
-- Creates a backup evaluation.py.bak_cot_all if not already present.
-- Idempotent: safe to run multiple times.
 """
 from pathlib import Path
 import re
@@ -39,8 +36,7 @@ def insert_after(pattern, block, flags=re.M):
     return False
 
 # --------------------------------------------------------------------
-# 1) Enforce shorter generations when compression_ratio < 1.0 and not using LoRA
-#    Insert right after args parsing line.
+# 1) Enforce shorter generations (only scaling max_new_tokens)
 # --------------------------------------------------------------------
 enforce_block = (
     "\n"
@@ -52,7 +48,21 @@ enforce_block = (
 insert_after(r"args,\s*unparsed_args\s*=\s*parser\.parse_known_args\(\)", enforce_block)
 
 # --------------------------------------------------------------------
-# 2) Remove any previously injected greedy-decoding block to avoid duplicates
+# 2) Remove compression_ratio tokens from any prompt template strings
+# --------------------------------------------------------------------
+ratio_injections = [
+    r"\{args\.compression_ratio\}",
+    r"<\|eot_id\|>\s*\{args\.compression_ratio\}\s*<\|eot_id\|>",
+    r"\{tokenizer\.eos_token\}\s*\{args\.compression_ratio\}\s*\{tokenizer\.eos_token\}",
+]
+for pat in ratio_injections:
+    new_s = re.sub(pat, "", s)
+    if new_s != s:
+        s = new_s
+        changed = True
+
+# --------------------------------------------------------------------
+# 3) Remove any existing greedy-decoding block to avoid duplicates
 # --------------------------------------------------------------------
 greedy_pat = re.compile(
     r"\n\s*# ---- Greedy decoding cleanup: remove sampling-only params so warnings disappear ----\n"
@@ -69,8 +79,7 @@ if s2 != s:
     changed = True
 
 # --------------------------------------------------------------------
-# 3) Insert greedy-decoding cleanup after a safe point in the HF branch
-#    Prefer: after adapter merge; else after AutoModelForCausalLM.from_pretrained(...)
+# 4) Insert greedy-decoding cleanup after adapter merge or HF model load
 # --------------------------------------------------------------------
 greedy_block = (
     "\n"
@@ -83,18 +92,15 @@ greedy_block = (
     "\n"
 )
 
-# Try after PEFT adapter merge
-insert_after_pat = re.compile(
-    r"(model\s*=\s*PeftModel\.from_pretrained\(.*?\)\s*\n\s*model\s*=\s*model\.merge_and_unload\(\)\s*\n)",
-    re.S,
-)
-
 def insert_after_adapter(text):
+    insert_after_pat = re.compile(
+        r"(model\s*=\s*PeftModel\.from_pretrained\(.*?\)\s*\n\s*model\s*=\s*model\.merge_and_unload\(\)\s*\n)",
+        re.S,
+    )
     m = insert_after_pat.search(text)
     if m:
         i = text.find("\n", m.end()) + 1
         return text[:i] + greedy_block + text[i:], True
-    # Fallback: after the HF model load
     load_pat = re.compile(r"(model\s*=\s*AutoModelForCausalLM\.from_pretrained\([^)]*\)\s*\n)", re.S)
     m2 = load_pat.search(text)
     if m2:
@@ -108,11 +114,11 @@ if ok:
     changed = True
 
 # --------------------------------------------------------------------
-# 4) Write back if anything changed
+# 5) Write back
 # --------------------------------------------------------------------
 if changed:
     p.write_text(s, encoding="utf-8")
-    print("✅ evaluation.py patched: enforced compressed-CoT token budget and fixed greedy-decoding insertion.")
+    print("✅ evaluation.py patched: enforced compression budget, fixed greedy-decoding, and removed ratio tokens from prompts.")
     print("Backup at evaluation.py.bak_cot_all")
 else:
     print("ℹ️ No changes made; patterns not found or already patched.")

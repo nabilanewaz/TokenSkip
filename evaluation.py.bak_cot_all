@@ -47,12 +47,12 @@ def infer(args, test_data, answer_extraction_fn):
             if mess['role'] == 'user':
                 if args.model_type == 'llama3':
                     if args.compression_ratio < 1.0:
-                        prompt += f"{tokenizer.bos_token}" + "<|start_header_id|>user<|end_header_id|>\n\nPlease reason step by step, and put your final answer within \\boxed{}.\n" + f"{mess['content']}\n{tokenizer.eos_token}{tokenizer.eos_token}{tokenizer.eos_token}<|start_header_id|>assistant<|end_header_id|>\n\n"
+                        prompt += f"{tokenizer.bos_token}" + "<|start_header_id|>user<|end_header_id|>\n\nPlease reason step by step, and put your final answer within \\boxed{}.\n" + f"{mess['content']}\n{tokenizer.eos_token}{args.compression_ratio}{tokenizer.eos_token}{tokenizer.eos_token}<|start_header_id|>assistant<|end_header_id|>\n\n"
                     else:
                         prompt += f"{tokenizer.bos_token}" + "<|start_header_id|>user<|end_header_id|>\n\nPlease reason step by step, and put your final answer within \\boxed{}.\n" + f"{mess['content']}\n{tokenizer.eos_token}<|start_header_id|>assistant<|end_header_id|>\n\n"
                 elif args.model_type == 'qwen':
                     if args.compression_ratio < 1.0:
-                        prompt += "<|im_start|>system\nYou are a helpful assistant.<|im_end|>\n<|im_start|>user\nPlease reason step by step, and put your final answer within \\boxed{}.\n" + f"{mess['content']}<|eot_id|><|eot_id|><|im_end|>\n<|im_start|>assistant\n"
+                        prompt += "<|im_start|>system\nYou are a helpful assistant.<|im_end|>\n<|im_start|>user\nPlease reason step by step, and put your final answer within \\boxed{}.\n" + f"{mess['content']}<|eot_id|>{args.compression_ratio}<|eot_id|><|im_end|>\n<|im_start|>assistant\n"
                     else:
                         prompt += "<|im_start|>system\nYou are a helpful assistant.<|im_end|>\n<|im_start|>user\nPlease reason step by step, and put your final answer within \\boxed{}.\n" + f"{mess['content']}<|im_end|>\n<|im_start|>assistant\n"
                 else:
@@ -108,14 +108,6 @@ def infer(args, test_data, answer_extraction_fn):
             model = model.merge_and_unload()
 
         # set padding side to left for batch generation
-
-        # ---- Greedy decoding cleanup: remove sampling-only params so warnings disappear ----
-        gc = model.generation_config
-        gc.do_sample = False
-        gc.temperature = None
-        gc.top_k = None
-        gc.top_p = None
-
         tokenizer.padding_side = "left"
         # set pad token to eos token if pad token is not set (as is the case for llama models)
         if tokenizer.pad_token is None:
@@ -188,11 +180,6 @@ if __name__ == "__main__":
     parser.add_argument("--seed", type=int, default=42)
     args, unparsed_args = parser.parse_known_args()
 
-    # --- enforce shorter generations for compressed runs (no-LoRA path) ---
-    if args.compression_ratio < 1.0 and not args.use_adapter:
-        args.max_new_tokens = max(32, int(args.max_new_tokens * args.compression_ratio))
-
-
     # os.environ['CUDA_VISIBLE_DEVICES'] = "0"
 
     if args.benchmark == 'math' and args.use_adapter:
@@ -201,10 +188,10 @@ if __name__ == "__main__":
     print(f"Evaluating {args.model_path}", flush=True)
     print(f"Max new tokens: {args.max_new_tokens}, eval batch size: {args.eval_batch_size}, temperature: {args.temperature}, seed: {args.seed}\n", flush=True)
     if args.use_adapter:
-        print(f"Adapter path {args.adapter_path}, compression ratio: ", flush=True)
+        print(f"Adapter path {args.adapter_path}, compression ratio: {args.compression_ratio}", flush=True)
 
     if args.use_adapter:
-        args.output_dir = os.path.join(args.output_dir, f"{args.model_size}/", f"TokenSkip/", f"/")
+        args.output_dir = os.path.join(args.output_dir, f"{args.model_size}/", f"TokenSkip/", f"{args.compression_ratio}/")
     else:
         args.output_dir = os.path.join(args.output_dir, f"{args.model_size}/", f"Original/{args.data_type}/")
 

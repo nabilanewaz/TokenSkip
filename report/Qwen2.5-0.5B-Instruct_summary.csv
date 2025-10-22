@@ -1,0 +1,3 @@
+run,n_examples,accuracy,avg_cot_length,pct_truncated
+compressed,50,0.02,115.0,1.0
+full,50,0.14,190.52,0.84

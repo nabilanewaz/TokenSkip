@@ -10,6 +10,9 @@ pip install transformers==4.47.0 datasets==3.1.0 accelerate==1.2.1 peft==0.14.0 
 
 pip install hf_transfer
 
+pip install matplotlib
+pip install seaborn
+
 python -c "import torch, torchvision, torchaudio; print('torch', torch.__version__); print('torchvision', torchvision.__version__); print('torchaudio', torchaudio.__version__)"
 
 python patch_eval_cpu_safe.py 
@@ -22,6 +25,7 @@ $env:TRANSFORMERS_NO_TORCHVISION=1
 $env:OMP_NUM_THREADS=4                                                                      
 $env:MKL_NUM_THREADS=4
 
+Baseline (Full CoT):
 python .\evaluation.py `
   --model-path "Qwen/Qwen2.5-0.5B-Instruct" `
   --tokenizer-path "Qwen/Qwen2.5-0.5B-Instruct" `
@@ -32,20 +36,29 @@ python .\evaluation.py `
   --max_new_tokens 192 `
   --temperature 0.0 `
   --eval_batch_size 2 `
-  --output-dir "outputs/Qwen2.5-0.5B-Instruct/full_cot/"
+  --output-dir "outputs/Qwen2.5-0.5B-Instruct/full_cot/" `
+  --seed 42
 
+
+Compressed CoT (example ratio = 0.60):
 python .\evaluation.py `
   --model-path "Qwen/Qwen2.5-0.5B-Instruct" `
   --tokenizer-path "Qwen/Qwen2.5-0.5B-Instruct" `
   --model-type qwen `
   --benchmark gsm8k `
   --data-type test `
-  --compression_ratio 0.35 `
   --max_num_examples 50 `
   --max_new_tokens 192 `
+  --compression_ratio 0.60 `
   --temperature 0.0 `
   --eval_batch_size 2 `
-  --output-dir "outputs/Qwen2.5-0.5B-Instruct/compressed_cot/"
+  --output-dir "outputs/Qwen2.5-0.5B-Instruct/compressed_cot/" `
+  --seed 42
+
+python validate_side_by_side.py
+
+python instrument_run.py --run-dir "outputs/Qwen2.5-0.5B-Instruct/full_cot/7b/Original/test/samples" --out-csv full_cot_samples.csv
+python instrument_run.py --run-dir "outputs/Qwen2.5-0.5B-Instruct/compressed_cot/7b/Original/test/samples" --out-csv compressed_cot_samples.csv
 
 python .\compare_metrics.py `
   "outputs/Qwen2.5-0.5B-Instruct/full_cot/" `
