@@ -8,10 +8,14 @@ pip install --index-url https://download.pytorch.org/whl/cpu torch==2.5.1 torchv
 
 pip install transformers==4.47.0 datasets==3.1.0 accelerate==1.2.1 peft==0.14.0 sentencepiece==0.2.0 sympy antlr4-python3-runtime pebble
 
+pip install -U llamafactory
+
 pip install hf_transfer
 
 pip install matplotlib
 pip install seaborn
+
+python -m pip install "lm-eval>=0.4.2"
 
 python -c "import torch, torchvision, torchaudio; print('torch', torch.__version__); print('torchvision', torchvision.__version__); print('torchaudio', torchaudio.__version__)"
 
@@ -65,3 +69,30 @@ python .\compare_metrics.py `
   "outputs/Qwen2.5-0.5B-Instruct/compressed_cot/"
 
 deactivate
+
+$env:CUDA_VISIBLE_DEVICES = ""
+
+llamafactory-cli train `
+  --model_name_or_path "Qwen/Qwen2.5-0.5B-Instruct" `
+  --stage sft `
+  --finetuning_type lora `
+  --dataset gsm8k_cot60 `
+  --dataset_dir data `
+  --template qwen `
+  --output_dir "lora_out/qwen25-0.5b-cot60-lora" `
+  --cutoff_len 1024 `
+  --per_device_train_batch_size 1 `
+  --gradient_accumulation_steps 32 `
+  --learning_rate 2e-4 `
+  --num_train_epochs 1 `
+  --lora_rank 8 `
+  --lora_alpha 16 `
+  --lora_dropout 0.05 `
+  --fp16 false `
+  --bf16 false `
+  --overwrite_cache true `
+  --low_cpu_mem_usage true `
+  --offload_folder "offload_cpu" `
+  --gradient_checkpointing true `
+  --optim adamw_torch `
+  --use_cpu true

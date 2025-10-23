@@ -1,0 +1,11 @@
+{
+  "gsm8k_cot60": {
+    "file_name": "datasets/gsm8k/llamafactory_inputs/mydataset_compressed_gsm8k_llmlingua2_qwen_7B.json",
+    "formatting": "alpaca",
+    "columns": {
+      "prompt": "instruction",
+      "query": "input",
+      "response": "output"
+    }
+  }
+}
