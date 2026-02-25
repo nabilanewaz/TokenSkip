@@ -1,0 +1,7 @@
+{
+    "n_samples": 1319,
+    "accuracy": 0.392,
+    "avg_cot_length": null,
+    "sample_latency": 26.16899999639498,
+    "source": "CODI-GPT2 (zen-E/CODI-gpt2)"
+}

@@ -3,141 +3,143 @@ import json
 from tqdm import tqdm
 from llmlingua import PromptCompressor
 
+from model_registry import get_config   # ← replaces all if/elif model_type blocks
+
 
 def load_jsonl(file, encoding='utf-8'):
     data = []
     with open(file, 'r', encoding=encoding) as f:
-        for j in f.readlines():
-            j = json.loads(j)
-            data.append(j)
+        for line in f:
+            data.append(json.loads(line))
     return data
+
 
 def save_jsonl(data, output_path):
     if os.path.exists(output_path):
         os.remove(output_path)
-    if not os.path.exists(os.path.dirname(output_path)):
-        os.makedirs(os.path.dirname(output_path))
+    os.makedirs(os.path.dirname(output_path), exist_ok=True)
+    with open(output_path, 'a+', encoding='utf-8') as f:
+        for item in data:
+            f.write(json.dumps(item, ensure_ascii=False) + '\n')
 
+
+def filter_correct_outputs(input_path, output_path):
+    """Keep only examples where the model's answer was correct."""
+    data = load_jsonl(input_path)
+    correct = [d for d in data if d['accuracy']]
+    print(f"Correct filter: {len(data)} → {len(correct)} ({len(correct)/len(data)*100:.1f}%)")
+    save_jsonl(correct, output_path)
+
+
+def filter_formatted_outputs(input_path, output_path, model_type):
+    """
+    Remove very long CoTs (>500 tokens) and, for llama3, extract the CoT
+    portion before the final-answer line.
+    All logic is now driven by model_registry — no if/elif needed here.
+    """
+    cfg  = get_config(model_type)
+    data = load_jsonl(input_path)
+
+    formatted = []
     for item in data:
-        with open(output_path, 'a+', encoding='utf-8') as f:
-            line = json.dumps(item, ensure_ascii=False)
-            f.write(line + '\n')
-
-def filter_correct_outputs(input_path="outputs/Qwen2.5-7B-Instruct/gsm8k/7b/Original/samples/predictions.jsonl",
-                           output_path="outputs/Qwen2.5-7B-Instruct/gsm8k/7b/Original/samples/predictions_correct.jsonl"):
-    """
-    Filter the correct outputs from the data.
-    """
-    data = load_jsonl(input_path)
-    correct_data = []
-    for i in range(len(data)):
-        if data[i]['accuracy']:
-            correct_data.append(data[i])
-    print(f"Original Samples: {len(data)}, Correct Samples: {len(correct_data)}, Accuracy: {len(correct_data) / len(data)}")
-    save_jsonl(correct_data, output_path)
-
-
-def filter_formatted_outputs(input_path="outputs/Qwen2.5-7B-Instruct/gsm8k/7b/Original/samples/predictions_correct.jsonl",
-                             output_path="outputs/Qwen2.5-7B-Instruct/gsm8k/7b/Original/samples/predictions_formatted.jsonl", model_type="qwen"):
-    """
-    Filter the formatted outputs from the data. Extract COT from th outputs.
-    """
-    data = load_jsonl(input_path)
-    formatted_data = []
-    for i in range(len(data)):
-        if data[i]['cot_length'] > 500:
+        if item['cot_length'] > 500:
             continue
+        # llama3 stores raw output that needs splitting; others already have cot
         if model_type == "llama3":
-            spans = data[i]["output"].split('\n\nThe final answer is:')
-            if len(spans) == 2:
-                data[i]["cot"] = spans[0]
-                formatted_data.append(data[i])
-        elif model_type == "qwen":
-            formatted_data.append(data[i])
+            parts = item["output"].split('\n\nThe final answer is:')
+            if len(parts) == 2:
+                item["cot"] = parts[0]
+                formatted.append(item)
         else:
-            raise ValueError(f"Model Type {model_type} is not supported.")
-    print(f"Original Samples: {len(data)}, Formatted Samples: {len(formatted_data)}")
-    save_jsonl(formatted_data, output_path)
+            # For qwen, gpt2, mistral, phi3 etc. the cot_field is ready as-is
+            formatted.append(item)
+
+    print(f"Format filter : {len(data)} → {len(formatted)}")
+    save_jsonl(formatted, output_path)
+
 
 def LLMLingua(data, compression_ratio=0.5, model_type="qwen",
-              llmlingua_path="/your_model_path/llmlingua-2-xlm-roberta-large-meetingbank"):
-    """
-    Compress the CoT outputs with LLMLingua-2.
-    """
-    if model_type == "llama3":
-        cot_type = "cot"
-    elif model_type == "qwen":
-        cot_type = "model_output"
-    else:
-        raise ValueError(f"Model Type {model_type} is not supported.")
+              llmlingua_path="llmlingua-2-xlm-roberta-large-meetingbank"):
+    """Compress CoT outputs with LLMLingua-2 at the given ratio."""
+    cfg       = get_config(model_type)
+    cot_field = cfg["cot_field"]          # e.g. "model_output" or "cot"
 
     llm_lingua = PromptCompressor(
         model_name=llmlingua_path,
-        use_llmlingua2=True,  # Whether to use llmlingua-2
+        use_llmlingua2=True,
     )
-    compressed_data = []
-    for i in tqdm(range(len(data))):
-        cot_output = data[i][cot_type]
+
+    compressed = []
+    for item in tqdm(data):
+        cot_text = item[cot_field]
+
+        # llama3 benefits from preserving step markers
         if model_type == "llama3":
-            compressed_prompt = llm_lingua.compress_prompt(cot_output, rate=compression_ratio, force_tokens=['Step', ':'], force_reserve_digit=True, drop_consecutive=True)
-        elif model_type == "qwen":
-            compressed_prompt = llm_lingua.compress_prompt(cot_output, rate=compression_ratio)
+            result = llm_lingua.compress_prompt(
+                cot_text, rate=compression_ratio,
+                force_tokens=['Step', ':'],
+                force_reserve_digit=True,
+                drop_consecutive=True,
+            )
         else:
-            raise ValueError(f"Model Type {model_type} is not supported.")
-        compressed_data_line = {
-            'question': data[i]['messages'][0]['content'],
-            'input': data[i]['prompt'],
-            'output': data[i]['model_output'],
-            'answer': data[i]['answer'],
-            'model_answer': data[i]['prediction'],
-            'is_correct': data[i]['accuracy'],
-            'cot': data[i][cot_type],
-            'compressed_cot': compressed_prompt['compressed_prompt'],
-            'original_cot_tokens': compressed_prompt['origin_tokens'],
-            'compressed_cot_tokens': compressed_prompt['compressed_tokens'],
-            'compression_rate': compressed_prompt['rate']
-        }
-        compressed_data.append(compressed_data_line)
-    return compressed_data
+            result = llm_lingua.compress_prompt(cot_text, rate=compression_ratio)
 
+        compressed.append({
+            'question':              item['messages'][0]['content'],
+            'input':                 item['prompt'],
+            'output':                item['model_output'],
+            'answer':                item['answer'],
+            'model_answer':          item['prediction'],
+            'is_correct':            item['accuracy'],
+            'cot':                   cot_text,
+            'compressed_cot':        result['compressed_prompt'],
+            'original_cot_tokens':   result['origin_tokens'],
+            'compressed_cot_tokens': result['compressed_tokens'],
+            'compression_rate':      result['rate'],
+        })
+    return compressed
 
-def compress_cot_outputs(input_path="outputs/Qwen2.5-7B-Instruct/gsm8k/7b/Original/samples/predictions_formatted.jsonl",
-                         output_dir="outputs/Qwen2.5-7B-Instruct/gsm8k/7b/Compression", model_type="qwen",
-                         llmlingua_path="llmlingua-2-xlm-roberta-large-meetingbank"):
-    """
-    Compress the CoT outputs with various compression ratios using LLMLingua-2.
-    """
-    data = load_jsonl(input_path)
-    ratio_list = [0.9, 0.8, 0.7, 0.6, 0.5]
-    for compression_ratio in ratio_list:
-        output_path = os.path.join(output_dir, f"train_outputs_compressed_ratio_{compression_ratio}.jsonl")
-        compressed_data = LLMLingua(data, compression_ratio=compression_ratio, model_type=model_type, llmlingua_path=llmlingua_path)
-        save_jsonl(compressed_data, output_path)
-        get_average_compress_rate(compressed_data)
 
 def get_average_compress_rate(data):
-    compress_rate = 0
-    for i in range(len(data)):
-        compress_rate += data[i]['compressed_cot_tokens'] / data[i]['original_cot_tokens']
-    compress_rate = compress_rate / len(data)
-    print(f"Average Compression Rate: {compress_rate}")
+    rate = sum(d['compressed_cot_tokens'] / d['original_cot_tokens'] for d in data) / len(data)
+    print(f"Average compression rate: {rate:.3f}")
 
 
-def data_processing_gsm8k(input_dir="outputs/Qwen2.5-7B-Instruct/gsm8k/7b/", model_type="qwen",
-                          llmlingua_path="/your_model_path/llmlingua-2-xlm-roberta-large-meetingbank"):
+def compress_cot_outputs(input_path, output_dir, model_type, llmlingua_path):
+    """Run LLMLingua at every standard ratio and save results."""
+    data       = load_jsonl(input_path)
+    ratio_list = [0.9, 0.8, 0.7, 0.6, 0.5]
+    for ratio in ratio_list:
+        out_path       = os.path.join(output_dir, f"train_outputs_compressed_ratio_{ratio}.jsonl")
+        compressed     = LLMLingua(data, compression_ratio=ratio,
+                                   model_type=model_type, llmlingua_path=llmlingua_path)
+        save_jsonl(compressed, out_path)
+        get_average_compress_rate(compressed)
+
+
+def data_processing(input_dir, model_type,
+                    llmlingua_path="llmlingua-2-xlm-roberta-large-meetingbank"):
     """
-    The overall pipeline to process the GSM8K data.
+    Full pipeline: correct → formatted → compressed.
+    Works for any model_type registered in model_registry.
     """
-    input_path = os.path.join(input_dir, "Original/train/samples/predictions.jsonl")
-    correct_path = os.path.join(input_dir, "Original/train/samples/predictions_correct.jsonl")
+    input_path     = os.path.join(input_dir, "Original/train/samples/predictions.jsonl")
+    correct_path   = os.path.join(input_dir, "Original/train/samples/predictions_correct.jsonl")
     formatted_path = os.path.join(input_dir, "Original/train/samples/predictions_formatted.jsonl")
     compressed_dir = os.path.join(input_dir, "Compression")
 
     filter_correct_outputs(input_path=input_path, output_path=correct_path)
     filter_formatted_outputs(input_path=correct_path, output_path=formatted_path, model_type=model_type)
-    compress_cot_outputs(input_path=formatted_path, output_dir=compressed_dir, model_type=model_type, llmlingua_path=llmlingua_path)
+    compress_cot_outputs(input_path=formatted_path, output_dir=compressed_dir,
+                         model_type=model_type, llmlingua_path=llmlingua_path)
+
+
+# Convenience aliases kept for backward compatibility
+def data_processing_gsm8k(input_dir="outputs/Qwen2.5-7B-Instruct/gsm8k/7b/",
+                           model_type="qwen",
+                           llmlingua_path="/your_model_path/llmlingua-2-xlm-roberta-large-meetingbank"):
+    data_processing(input_dir=input_dir, model_type=model_type, llmlingua_path=llmlingua_path)
+
 
 if __name__ == '__main__':
     data_processing_gsm8k()
-
-

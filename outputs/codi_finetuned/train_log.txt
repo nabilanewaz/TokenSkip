@@ -1,0 +1,64 @@
+C:\Users\Orin\AppData\Local\Programs\Python\Python312\Lib\site-packages\huggingface_hub\file_download.py:949: FutureWarning: `resume_download` is deprecated and will be removed in version 1.0.0. Downloads always resume when possible. If you want to force a new download, use `force_download=True`.
+  warnings.warn(
+The new embeddings will be initialized from a multivariate normal distribution that has old embeddings' mean and covariance. As described in this article: https://nlp.stanford.edu/~johnhew/vocab-expansion.html. To disable this, use `mean_resizing=False`
+C:\Users\Orin\AppData\Local\Programs\Python\Python312\Lib\site-packages\peft\tuners\lora\layer.py:1768: UserWarning: fan_in_fan_out is set to False but the target module is `Conv1D`. Setting fan_in_fan_out to True.
+  warnings.warn(
+WARNING:root:Downloading Data
+cpu
+trainable params: 20057088 || all params: 144499200 || trainable%: 13.880414562848792
+
+Generating train split: 0 examples [00:00, ? examples/s]
+Generating train split: 6000 examples [00:00, 18348.29 examples/s]
+Generating train split: 6000 examples [00:00, 17643.22 examples/s]
+WARNING:root:Formatting inputs...
+WARNING:root:Tokenizing inputs... This may take some time...
+G:\Thesis\TokenSkip\codi_workspace\CODI\train_fixed.py:428: FutureWarning: `tokenizer` is deprecated and will be removed in version 5.0.0 for `CustomTrainer.__init__`. Use `processing_class` instead.
+  trainer = CustomTrainer(model=model, tokenizer=tokenizer, args=training_args, **data_module)
+5997 data in total...
+Tokenizing inputs... This may take some time...
+
+  0%|          | 0/17991 [00:00<?, ?it/s]C:\Users\Orin\AppData\Local\Programs\Python\Python312\Lib\site-packages\torch\utils\data\dataloader.py:668: UserWarning: 'pin_memory' argument is set as true but no accelerator is found, then device pinned memory won't be used.
+  warnings.warn(warn_msg)
+Traceback (most recent call last):
+  File "G:\Thesis\TokenSkip\codi_workspace\CODI\train_fixed.py", line 444, in <module>
+  File "G:\Thesis\TokenSkip\codi_workspace\CODI\train_fixed.py", line 429, in train
+  File "C:\Users\Orin\AppData\Local\Programs\Python\Python312\Lib\site-packages\transformers\trainer.py", line 2240, in train
+    return inner_training_loop(
+           ^^^^^^^^^^^^^^^^^^^^
+  File "C:\Users\Orin\AppData\Local\Programs\Python\Python312\Lib\site-packages\transformers\trainer.py", line 2555, in _inner_training_loop
+    tr_loss_step = self.training_step(model, inputs, num_items_in_batch)
+                   ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "C:\Users\Orin\AppData\Local\Programs\Python\Python312\Lib\site-packages\transformers\trainer.py", line 3745, in training_step
+    loss = self.compute_loss(model, inputs, num_items_in_batch=num_items_in_batch)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "G:\Thesis\TokenSkip\codi_workspace\CODI\train_fixed.py", line 67, in compute_loss
+  File "C:\Users\Orin\AppData\Local\Programs\Python\Python312\Lib\site-packages\torch\nn\modules\module.py", line 1775, in _wrapped_call_impl
+    return self._call_impl(*args, **kwargs)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "C:\Users\Orin\AppData\Local\Programs\Python\Python312\Lib\site-packages\torch\nn\modules\module.py", line 1786, in _call_impl
+    return forward_call(*args, **kwargs)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "G:\Thesis\TokenSkip\codi_workspace\CODI\src\model.py", line 285, in forward
+    latent_embd = self.prj(latent_embd)
+                  ^^^^^^^^^^^^^^^^^^^^^
+  File "C:\Users\Orin\AppData\Local\Programs\Python\Python312\Lib\site-packages\torch\nn\modules\module.py", line 1775, in _wrapped_call_impl
+    return self._call_impl(*args, **kwargs)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "C:\Users\Orin\AppData\Local\Programs\Python\Python312\Lib\site-packages\torch\nn\modules\module.py", line 1786, in _call_impl
+    return forward_call(*args, **kwargs)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "C:\Users\Orin\AppData\Local\Programs\Python\Python312\Lib\site-packages\torch\nn\modules\container.py", line 250, in forward
+    input = module(input)
+            ^^^^^^^^^^^^^
+  File "C:\Users\Orin\AppData\Local\Programs\Python\Python312\Lib\site-packages\torch\nn\modules\module.py", line 1775, in _wrapped_call_impl
+    return self._call_impl(*args, **kwargs)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "C:\Users\Orin\AppData\Local\Programs\Python\Python312\Lib\site-packages\torch\nn\modules\module.py", line 1786, in _call_impl
+    return forward_call(*args, **kwargs)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "C:\Users\Orin\AppData\Local\Programs\Python\Python312\Lib\site-packages\torch\nn\modules\linear.py", line 134, in forward
+    return F.linear(input, self.weight, self.bias)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+RuntimeError: mat1 and mat2 must have the same dtype, but got Half and Float
+
+  0%|          | 0/17991 [01:12<?, ?it/s]
