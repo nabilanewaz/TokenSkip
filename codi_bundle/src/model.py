@@ -289,10 +289,11 @@ class CODI(torch.nn.Module):
         outputs = self.codi(input_ids=encoder_input_ids, use_cache=True, output_hidden_states=True, past_key_values=past_key_values, attention_mask=encoder_attention_mask)
         past_key_values = outputs.past_key_values
         latent_embd = outputs.hidden_states[-1][:, -1, :].unsqueeze(1) # as the next input
-        # Ensure consistent dtype on CPU
-        if not torch.cuda.is_available() and latent_embd.dtype != torch.float32:
-            latent_embd = latent_embd.float()
+        # Ensure consistent dtype (CPU needs float32, GPU mixed precision needs matching dtypes)
         if self.use_prj:
+            # Match latent_embd dtype to projection layer dtype
+            if latent_embd.dtype != next(self.prj.parameters()).dtype:
+                latent_embd = latent_embd.to(next(self.prj.parameters()).dtype)
             latent_embd = self.prj(latent_embd)
 
         len_pred_loss = 0
