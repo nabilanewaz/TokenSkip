@@ -88,6 +88,10 @@ class TrainingArguments(transformers.TrainingArguments):
     per_device_eval_batch_size: int = field(
         default=1,
     )
+    save_safetensors: bool = field(
+        default=False,
+        metadata={"help": "Use PyTorch format instead of safetensors (fixes shared weight issue)"},
+    )
     expt_name: str = field(
         default="default",
         metadata={"help": "Experiment name"},
