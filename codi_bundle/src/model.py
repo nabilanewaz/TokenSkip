@@ -289,12 +289,17 @@ class CODI(torch.nn.Module):
         outputs = self.codi(input_ids=encoder_input_ids, use_cache=True, output_hidden_states=True, past_key_values=past_key_values, attention_mask=encoder_attention_mask)
         past_key_values = outputs.past_key_values
         latent_embd = outputs.hidden_states[-1][:, -1, :].unsqueeze(1) # as the next input
-        # Ensure consistent dtype (CPU needs float32, GPU mixed precision needs matching dtypes)
+        # Store original dtype from model's hidden states
+        target_dtype = outputs.hidden_states[-1].dtype
+        
         if self.use_prj:
-            # Match latent_embd dtype to projection layer dtype
+            # Match latent_embd dtype to projection layer dtype for projection
             if latent_embd.dtype != next(self.prj.parameters()).dtype:
                 latent_embd = latent_embd.to(next(self.prj.parameters()).dtype)
             latent_embd = self.prj(latent_embd)
+            # Convert back to model's expected dtype (float16 for GPU mixed precision)
+            if latent_embd.dtype != target_dtype:
+                latent_embd = latent_embd.to(target_dtype)
 
         len_pred_loss = 0
         dynamic_mask = None
@@ -347,7 +352,13 @@ class CODI(torch.nn.Module):
                 past_key_values = outputs.past_key_values
                 latent_embd = outputs.hidden_states[-1][:, -1, :].unsqueeze(1)
                 if self.use_prj:
+                    # Match dtype for projection
+                    if latent_embd.dtype != next(self.prj.parameters()).dtype:
+                        latent_embd = latent_embd.to(next(self.prj.parameters()).dtype)
                     latent_embd = self.prj(latent_embd)
+                    # Convert back to model's expected dtype
+                    if latent_embd.dtype != target_dtype:
+                        latent_embd = latent_embd.to(target_dtype)
 
                 # Calculate the distillation loss
                 if i == num_latent - 1: # the last latent embedding
