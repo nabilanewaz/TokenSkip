@@ -145,14 +145,26 @@ This codebase is built from [DeepSeek-Math](https://github.com/deepseek-ai/DeepS
 If you find the resources in this repository useful, please cite our paper:
 
 ```
-@misc{xia2025tokenskip,
-      title={TokenSkip: Controllable Chain-of-Thought Compression in LLMs}, 
-      author={Heming Xia and Yongqi Li and Chak Tou Leong and Wenjie Wang and Wenjie Li},
-      year={2025},
-      eprint={2502.12067},
-      archivePrefix={arXiv},
-      primaryClass={cs.CL},
-      url={https://arxiv.org/abs/2502.12067}, 
+@inproceedings{xia-etal-2025-tokenskip,
+    title = "{T}oken{S}kip: Controllable Chain-of-Thought Compression in {LLM}s",
+    author = "Xia, Heming  and
+      Leong, Chak Tou  and
+      Wang, Wenjie  and
+      Li, Yongqi  and
+      Li, Wenjie",
+    editor = "Christodoulopoulos, Christos  and
+      Chakraborty, Tanmoy  and
+      Rose, Carolyn  and
+      Peng, Violet",
+    booktitle = "Proceedings of the 2025 Conference on Empirical Methods in Natural Language Processing",
+    month = nov,
+    year = "2025",
+    address = "Suzhou, China",
+    publisher = "Association for Computational Linguistics",
+    url = "https://aclanthology.org/2025.emnlp-main.165/",
+    doi = "10.18653/v1/2025.emnlp-main.165",
+    pages = "3351--3363",
+    ISBN = "979-8-89176-332-6",
 }
 ```
 
