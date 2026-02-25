@@ -3,14 +3,14 @@
 ## Step 1: Upload Your Code to GitHub
 
 ```powershell
-# Initialize git repo (if not already done)
-cd G:\Thesis\TokenSkip
-git init
-git add train_codi.py datasets/gsm8k_split/*.jsonl patch_codi_model_cpu.py
-git commit -m "CODI training setup"
+# Your repo is already set up at:
+# https://github.com/nabilanewaz/TokenSkip
 
-# Create repo on GitHub and push
-gh repo create TokenSkip --private --source=. --remote=origin --push
+# Just push your latest changes
+cd G:\Thesis\TokenSkip
+git add train_codi.py datasets/gsm8k_split/*.jsonl patch_codi_model_cpu.py colab_training.ipynb
+git commit -m "Add Colab training setup"
+git push
 ```
 
 ## Step 2: Open Google Colab
@@ -23,7 +23,7 @@ gh repo create TokenSkip --private --source=. --remote=origin --push
 
 ```python
 # Cell 1: Clone your repository
-!git clone https://github.com/YOUR_USERNAME/TokenSkip.git
+!git clone https://github.com/nabilanewaz/TokenSkip.git
 %cd TokenSkip
 
 # Cell 2: Install dependencies
