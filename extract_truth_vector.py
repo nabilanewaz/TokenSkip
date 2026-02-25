@@ -61,13 +61,13 @@ def clone_codi(work_dir):
 def get_checkpoint(work_dir, override=None):
     from huggingface_hub import snapshot_download
     if override:
-        p = pathlib.Path(override)
+        p = pathlib.Path(override).resolve()  # Convert to absolute path
         assert p.exists(), f"--ckpt-dir not found: {p}"
         return p
     def ok(p): return (p/"model.safetensors").exists() or (p/"pytorch_model.bin").exists()
     f = work_dir/"ckpt_dir.txt"
     if f.exists():
-        p = pathlib.Path(f.read_text().strip())
+        p = pathlib.Path(f.read_text().strip()).resolve()
         if ok(p): return p
     p = pathlib.Path(snapshot_download(repo_id=CODI_HF_ID, force_download=True,
                                        ignore_patterns=["*.msgpack","*.h5","flax_model*"]))
@@ -151,10 +151,21 @@ _TV_LAST_LAT  = None
 # === TV RECORD ===
 if _TV_DUMP_PATH and (_TV_LAST_LAT is not None):
     _tv_lat = _TV_LAST_LAT
-    _preds = locals().get("decoded", locals().get("pred_outputs", ""))
-    _gts   = locals().get("answers", locals().get("labels", ""))
+    # Scan for the decoded output variable (just assigned above)
+    _locals = locals()
+    _preds = None
+    for _var in ["decoded", "pred_outputs", "outputs", "predictions", "pred_output"]:
+        if _var in _locals and _locals[_var]: _preds = _locals[_var]; break
+    if _preds is None:  # Fallback: find the variable that was just assigned by tokenizer.decode
+        _preds = list(_locals.values())[-1] if _locals else ""
+    # Ground truth: check multiple possible names
+    _gts = None
+    for _var in ["answers", "labels", "gt_answers", "ground_truths", "answer"]:
+        if _var in _locals and _locals[_var]: _gts = _locals[_var]; break
+    if _gts is None: _gts = ""
+    # Normalize to lists
     if isinstance(_preds, str): _preds = [_preds]
-    if isinstance(_gts,   str): _gts   = [_gts]
+    if isinstance(_gts, str): _gts = [_gts]
     if _tv_torch.is_tensor(_tv_lat) and _tv_lat.dim() == 3:
         B = _tv_lat.size(0)
     else:
@@ -206,7 +217,7 @@ if _TV_DUMP_PATH and _TV_RECORDS:
 
 def run_dump(codi_dir, ckpt_dir, args, dump_path):
     env = os.environ.copy()
-    env["TV_DUMP_PATH"] = str(dump_path)
+    env["TV_DUMP_PATH"] = str(dump_path.resolve())  # Use absolute path
     env["TV_N_SAMPLES"] = str(args.n_samples)
 
     use_greedy = "True" if args.n_samples == 1 else "False"
@@ -239,13 +250,28 @@ def run_dump(codi_dir, ckpt_dir, args, dump_path):
 # ── Compute v_truth ────────────────────────────────────────────────────────────
 
 def extract_answer(text):
+    """Extract numeric answer from model output. Handles multiple formats."""
+    text = str(text).strip()
+    if not text:
+        return None
+    
+    # Try structured formats first
     for p in [r"####\s*([-+]?\d+\.?\d*)", r"answer is:?\s*([-+]?\d+\.?\d*)",
-              r"\$\s*([-+]?\d+\.?\d*)", r"=\s*([-+]?\d+\.?\d*)\s*$"]:
-        m = re.search(p, str(text), re.IGNORECASE)
+              r"\$\s*([-+]?\d+\.?\d*)", r"=\s*([-+]?\d+\.?\d*)\s*$",
+              r"answer:?\s*([-+]?\d+\.?\d*)"]:  # Added "answer:" format
+        m = re.search(p, text, re.IGNORECASE)
         if m:
             try: return float(m.group(1))
             except: pass
-    nums = re.findall(r"[-+]?\d+\.?\d*", str(text))
+    
+    # If text is a pure number (common in CODI short outputs)
+    try:
+        return float(text.strip())
+    except:
+        pass
+    
+    # Fallback: extract all numbers and take the last one
+    nums = re.findall(r"[-+]?\d+\.?\d*", text)
     try: return float(nums[-1]) if nums else None
     except: return None
 
@@ -256,22 +282,39 @@ def compute_truth_vector(dump_path, out_dir):
 
     pos, neg = [], []
     no_pred = no_gt = 0
+    sample_preds = []  # Collect samples for debugging
 
-    for r in records:
+    for i, r in enumerate(records):
         lat = r.get("latent")
         if lat is None or not torch.is_tensor(lat): continue
         if lat.dim() == 3 and lat.size(0) == 1: lat = lat.squeeze(0)
         if lat.dim() != 2: continue
 
-        pa = extract_answer(r.get("pred_text",""))
-        ga = extract_answer(r.get("gt_text",""))
+        pred_text = r.get("pred_text", "")
+        gt_text = r.get("gt_text", "")
+        
+        # Collect first 5 samples for debugging
+        if len(sample_preds) < 5:
+            sample_preds.append({"pred": pred_text, "gt": gt_text})
+
+        pa = extract_answer(pred_text)
+        ga = extract_answer(gt_text)
         if pa is None: no_pred += 1; continue
         if ga is None: no_gt   += 1; continue
 
         (pos if abs(pa-ga)<1e-4 else neg).append(lat.float())
 
+    # Show sample predictions for debugging
+    if sample_preds:
+        print("\n[extract_tv] Sample predictions (first 5):")
+        for idx, s in enumerate(sample_preds):
+            pred_ans = extract_answer(s["pred"])
+            gt_ans = extract_answer(s["gt"])
+            print(f"  [{idx+1}] pred='{s['pred'][:100]}' → {pred_ans}")
+            print(f"      gt  ='{s['gt'][:100]}' → {gt_ans}")
+
     n_pos, n_neg = len(pos), len(neg)
-    print(f"[extract_tv] H+:{n_pos}  H-:{n_neg}  no_pred:{no_pred}  no_gt:{no_gt}")
+    print(f"\n[extract_tv] H+:{n_pos}  H-:{n_neg}  no_pred:{no_pred}  no_gt:{no_gt}")
 
     if n_pos == 0 or n_neg == 0:
         print("[extract_tv] ✗ Need both positive and negative samples.")
@@ -334,8 +377,8 @@ def main():
     args = p.parse_args()
 
     work_dir   = pathlib.Path(args.work_dir).resolve()
-    steer_data = pathlib.Path(args.steer_data)
-    out_dir    = pathlib.Path(args.out_dir)
+    steer_data = pathlib.Path(args.steer_data).resolve()  # Convert to absolute path
+    out_dir    = pathlib.Path(args.out_dir).resolve()  # Convert to absolute path
     dump_path  = out_dir / "latent_dump.pt"
 
     print("=" * 62)
