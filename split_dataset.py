@@ -4,16 +4,20 @@ split_dataset.py
 Splits GSM8K into the exact partition defined in the research protocol:
 "Steering Continuous Reasoning via Latent Intervention"
 
-Starting point: full GSM8K (7473 train + 1319 test = 8792 examples)
+MINI-500 MODE (default)
+-----------------------
+This version uses a ~500-example subset for fast experimentation while
+preserving the original protocol proportions:
 
-Exact protocol counts
----------------------
-  llm_train     6,000   Base Training     — Train the base CCoT / CODI model
-  steer_train     500   Vector Extraction — Compute v_truth (Dsteer)
-  validation    1,500   Further Training  — Final hypothesis testing (Dfinal_train)
-  test            792   Testing           — Held-out, never used for training
-  ─────────────────────
-  TOTAL         8,792
+  llm_train       300   Base Training     — Train the base CCoT / CODI model
+  steer_train      50   Vector Extraction — Compute v_truth (Dsteer)
+  validation      100   Further Training  — Final hypothesis testing (Dfinal_train)
+  test             50   Testing           — Held-out, never used for training
+  ──────────────────
+  TOTAL           500
+
+To use the full 8792-example dataset instead, pass --full:
+    python split_dataset.py --full
 
 Critical rule (from protocol):
   validation (Dfinal_train) must NEVER be used to compute the truth vector.
@@ -23,10 +27,11 @@ All splits are deterministic given the same seed (default 42).
 
 Usage
 -----
-    python split_dataset.py
+    python split_dataset.py                  # mini-500 subset (default)
+    python split_dataset.py --full           # full 8792 examples
     python split_dataset.py --seed 123
-    python split_dataset.py --stats     # print sizes only, no files written
-    python split_dataset.py --hf        # force HuggingFace download
+    python split_dataset.py --stats          # print sizes only, no files written
+    python split_dataset.py --hf             # force HuggingFace download
 """
 
 import argparse, json, pathlib, random
@@ -36,12 +41,19 @@ DEFAULT_SOURCE = "datasets/gsm8k"
 DEFAULT_OUT    = "datasets/gsm8k_split"
 SEED           = 42
 
-# ── Exact counts from protocol ────────────────────────────────────────────────
-N_LLM_TRAIN   = 6000   # Base Training      (Dbase)
-N_STEER_TRAIN =  500   # Vector Extraction  (Dsteer)
-N_VALIDATION  = 1500   # Further Training   (Dfinal_train)
-N_TEST        =  792   # Held-out Testing
-EXPECTED_TOTAL = N_LLM_TRAIN + N_STEER_TRAIN + N_VALIDATION + N_TEST  # 8792
+# ── Mini-500 counts (fast experimentation) ────────────────────────────────────
+N_LLM_TRAIN_MINI   = 300
+N_STEER_TRAIN_MINI =  50
+N_VALIDATION_MINI  = 100
+N_TEST_MINI        =  50
+TOTAL_MINI         = N_LLM_TRAIN_MINI + N_STEER_TRAIN_MINI + N_VALIDATION_MINI + N_TEST_MINI  # 500
+
+# ── Full-dataset counts (original protocol) ───────────────────────────────────
+N_LLM_TRAIN_FULL   = 6000
+N_STEER_TRAIN_FULL =  500
+N_VALIDATION_FULL  = 1500
+N_TEST_FULL        =  792
+EXPECTED_TOTAL_FULL = N_LLM_TRAIN_FULL + N_STEER_TRAIN_FULL + N_VALIDATION_FULL + N_TEST_FULL  # 8792
 
 
 # ── I/O helpers ───────────────────────────────────────────────────────────────
@@ -88,21 +100,13 @@ def load_from_source(source_dir):
 
 # ── Splitting logic ────────────────────────────────────────────────────────────
 
-def split(data, seed):
+def split(data, seed, n_llm, n_steer, n_val):
+    """
+    Shuffle data deterministically, then carve out exact counts.
+    The remainder (everything after n_llm + n_steer + n_val) becomes test.
+    """
     total = len(data)
-    if total != EXPECTED_TOTAL:
-        print(f"  WARNING: expected {EXPECTED_TOTAL} examples, got {total}.")
-        print(f"  Adjusting test size to absorb the difference ({total - N_LLM_TRAIN - N_STEER_TRAIN - N_VALIDATION} test examples).")
-
-    rng = random.Random(seed)
-    shuffled = data.copy()
-    rng.shuffle(shuffled)
-
-    # Protocol-exact counts; test absorbs any remainder
-    n_llm   = N_LLM_TRAIN
-    n_steer = N_STEER_TRAIN
-    n_val   = N_VALIDATION
-    n_test  = total - n_llm - n_steer - n_val  # = 792 when total = 8792
+    n_test = total - n_llm - n_steer - n_val
 
     if n_test < 0:
         raise ValueError(
@@ -111,12 +115,20 @@ def split(data, seed):
             f"Cannot create a test set."
         )
 
+    # For mini mode, cap to exactly TOTAL_MINI so we don't use the full 8792
+    cap = n_llm + n_steer + n_val + n_test  # equals total unless mini is smaller
+
+    rng = random.Random(seed)
+    shuffled = data.copy()
+    rng.shuffle(shuffled)
+    shuffled = shuffled[:cap]  # take only what we need
+
     llm_train   = shuffled[:n_llm]
     steer_train = shuffled[n_llm : n_llm + n_steer]
     validation  = shuffled[n_llm + n_steer : n_llm + n_steer + n_val]
     test        = shuffled[n_llm + n_steer + n_val :]
 
-    assert len(llm_train) + len(steer_train) + len(validation) + len(test) == total
+    assert len(llm_train) + len(steer_train) + len(validation) + len(test) == len(shuffled)
 
     return {
         "llm_train":   llm_train,
@@ -126,14 +138,16 @@ def split(data, seed):
     }
 
 
-def print_stats(splits, total):
+def print_stats(splits, mode_label):
+    total = sum(len(v) for v in splits.values())
     rows = [
         ("llm_train",   "Base Training    — CODI/CCoT fine-tuning              (Dbase)"),
         ("steer_train", "Vector Extraction— v_truth computation                (Dsteer)"),
         ("validation",  "Further Training — hypothesis testing                 (Dfinal_train)"),
         ("test",        "Held-out Testing — never used during training"),
     ]
-    print(f"\n  {'Split':<14} {'N':>6}  {'% of total':>10}  Purpose")
+    print(f"\n  Mode: {mode_label}")
+    print(f"  {'Split':<14} {'N':>6}  {'% of total':>10}  Purpose")
     print("  " + "─" * 75)
     for name, purpose in rows:
         n   = len(splits[name])
@@ -146,10 +160,11 @@ def print_stats(splits, total):
     print("  compute v_truth. validation (Dfinal_train) must never touch Phase 2.\n")
 
 
-def write_config(out_dir, splits, seed):
+def write_config(out_dir, splits, seed, mode_label):
     total = sum(len(v) for v in splits.values())
     config = {
         "seed": seed,
+        "mode": mode_label,
         "total": total,
         "protocol": "Steering Continuous Reasoning via Latent Intervention",
         "splits": {
@@ -167,8 +182,10 @@ def write_config(out_dir, splits, seed):
             for name, data in splits.items()
         },
         "exact_counts": {
-            "llm_train": N_LLM_TRAIN, "steer_train": N_STEER_TRAIN,
-            "validation": N_VALIDATION, "test": N_TEST,
+            "llm_train":   len(splits["llm_train"]),
+            "steer_train": len(splits["steer_train"]),
+            "validation":  len(splits["validation"]),
+            "test":        len(splits["test"]),
         },
         "critical_rule": (
             "steer_train (Dsteer) is the only split used to compute v_truth. "
@@ -185,28 +202,44 @@ def write_config(out_dir, splits, seed):
 # ── Main ──────────────────────────────────────────────────────────────────────
 
 def main():
-    parser = argparse.ArgumentParser(description="Split GSM8K per research protocol exact counts")
+    parser = argparse.ArgumentParser(
+        description="Split GSM8K per research protocol — mini-500 by default"
+    )
     parser.add_argument("--source-dir", default=DEFAULT_SOURCE)
     parser.add_argument("--out-dir",    default=DEFAULT_OUT)
     parser.add_argument("--seed",       type=int, default=SEED)
-    parser.add_argument("--stats",      action="store_true", help="Print sizes only, no files written")
-    parser.add_argument("--hf",         action="store_true", help="Force HuggingFace download")
+    parser.add_argument("--full",       action="store_true",
+                        help="Use full 8792-example dataset instead of the mini-500 subset")
+    parser.add_argument("--stats",      action="store_true",
+                        help="Print sizes only, no files written")
+    parser.add_argument("--hf",         action="store_true",
+                        help="Force HuggingFace download")
     args = parser.parse_args()
+
+    # ── Select counts based on mode ──────────────────────────────────────────
+    if args.full:
+        n_llm, n_steer, n_val = N_LLM_TRAIN_FULL, N_STEER_TRAIN_FULL, N_VALIDATION_FULL
+        n_test_target = N_TEST_FULL
+        mode_label = f"FULL  (target {EXPECTED_TOTAL_FULL} examples)"
+    else:
+        n_llm, n_steer, n_val = N_LLM_TRAIN_MINI, N_STEER_TRAIN_MINI, N_VALIDATION_MINI
+        n_test_target = N_TEST_MINI
+        mode_label = f"MINI-500  (target {TOTAL_MINI} examples)"
 
     source_dir = pathlib.Path(args.source_dir)
     out_dir    = pathlib.Path(args.out_dir)
 
-    print(f"\nGSM8K Dataset Splitter  (protocol-exact counts)")
+    print(f"\nGSM8K Dataset Splitter")
+    print(f"  mode   : {mode_label}")
     print(f"  source : {source_dir}")
     print(f"  output : {out_dir}")
     print(f"  seed   : {args.seed}")
-    print(f"  target : llm={N_LLM_TRAIN}  steer={N_STEER_TRAIN}  val={N_VALIDATION}  test={N_TEST}\n")
+    print(f"  target : llm={n_llm}  steer={n_steer}  val={n_val}  test={n_test_target}\n")
 
     data   = load_gsm8k_hf() if args.hf else load_from_source(source_dir)
-    total  = len(data)
-    splits = split(data, args.seed)
+    splits = split(data, args.seed, n_llm, n_steer, n_val)
 
-    print_stats(splits, total)
+    print_stats(splits, mode_label)
 
     if args.stats:
         print("--stats mode: no files written.")
@@ -221,7 +254,7 @@ def main():
     save_jsonl(splits["test"], codi_test)
     print(f"  CODI-compatible test → {codi_test}")
 
-    write_config(out_dir, splits, args.seed)
+    write_config(out_dir, splits, args.seed, mode_label)
 
     print(f"\nDone. All splits in: {out_dir}/")
     print(f"\nPipeline:")
@@ -231,3 +264,6 @@ def main():
 
 if __name__ == "__main__":
     main()
+
+
+#python split_dataset.py --full for restore

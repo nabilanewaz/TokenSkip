@@ -75,22 +75,47 @@ def get_checkpoint(work_dir, override=None):
 
 def apply_cuda_patch(code):
     if "DEVICE = " not in code:
-        lines = code.split('\n'); import_end = 0; depth = 0
-        for i,line in enumerate(lines):
-            s = line.strip()
-            if not s or s.startswith('#'): continue
-            if depth > 0:
-                depth += s.count('(') - s.count(')')
-                if depth == 0: import_end = i+1
+        # Insert device detection right after the import block (handle multi-line imports)
+        lines = code.split('\n')
+        import_end = 0
+        in_import = False
+        for i, line in enumerate(lines):
+            stripped = line.strip()
+            if not stripped or stripped.startswith('#'):
                 continue
-            if s.startswith('import ') or s.startswith('from '):
-                depth = 1 if ('(' in s and ')' not in s) else 0
-                import_end = i+1; continue
-            break
+            # Start of an import
+            if stripped.startswith('import ') or stripped.startswith('from '):
+                in_import = True
+                # Check if it's a multi-line import (ends with '(' or '\')
+                if '(' in line and ')' not in line:
+                    # Multi-line import starting
+                    continue
+                elif line.rstrip().endswith('\\'):
+                    # Backslash continuation
+                    continue
+                else:
+                    # Single-line import
+                    import_end = i + 1
+                    in_import = False
+                    continue
+            # Inside a multi-line import
+            if in_import:
+                if ')' in line:
+                    # End of multi-line import
+                    import_end = i + 1
+                    in_import = False
+                continue
+            # Non-import, non-blank line - we're past imports
+            if not in_import:
+                break
+        
+        # Insert device block after the last import
+        device_block = "\n# --- device patch ---\nimport torch as _torch\nDEVICE = 'cuda' if _torch.cuda.is_available() else 'cpu'\n# --------------------\n\n"
         if import_end > 0:
             pos = len('\n'.join(lines[:import_end]))
-            block = "\n# --- device patch ---\nimport torch as _torch\nDEVICE = 'cuda' if _torch.cuda.is_available() else 'cpu'\n# --------------------\n\n"
-            code = code[:pos] + '\n' + block + code[pos:]
+            code = code[:pos] + '\n' + device_block + code[pos:]
+        else:
+            code = device_block + code
     code = re.sub(r"\.to\(['\"]cuda['\"]\)", ".to(DEVICE)", code)
     code = re.sub(r"\.cuda\(\)", ".to(DEVICE)", code)
     code = re.sub(r"device=['\"]cuda['\"]", "device=DEVICE", code)

@@ -154,19 +154,53 @@ def patch_test_py(codi_dir: pathlib.Path) -> pathlib.Path:
 
     # ── Fix 2: hardcoded CUDA — insert DEVICE constant + replace all .to('cuda') ──
     if "DEVICE = " not in code:
-        # Insert device detection right after the import block
+        # Insert device detection right after the import block (handle multi-line imports)
+        lines = code.split('\n')
         import_end = 0
-        for m in re.finditer(r'^(?:import|from)\s+\S+', code, flags=re.M):
-            import_end = m.end()
-        # Find end of that line
-        import_end = code.find('\n', import_end) + 1
+        in_import = False
+        for i, line in enumerate(lines):
+            stripped = line.strip()
+            if not stripped or stripped.startswith('#'):
+                continue
+            # Start of an import
+            if stripped.startswith('import ') or stripped.startswith('from '):
+                in_import = True
+                # Check if it's a multi-line import (ends with '(' or '\')
+                if '(' in line and ')' not in line:
+                    # Multi-line import starting
+                    continue
+                elif line.rstrip().endswith('\\'):
+                    # Backslash continuation
+                    continue
+                else:
+                    # Single-line import
+                    import_end = i + 1
+                    in_import = False
+                    continue
+            # Inside a multi-line import
+            if in_import:
+                if ')' in line:
+                    # End of multi-line import
+                    import_end = i + 1
+                    in_import = False
+                continue
+            # Non-import, non-blank line - we're past imports
+            if not in_import:
+                break
+        
+        # Insert device block after the last import
         device_block = (
             "\n# --- CPU/GPU device patch (injected by run_codi.py) ---\n"
             "import torch as _torch\n"
             "DEVICE = 'cuda' if _torch.cuda.is_available() else 'cpu'\n"
             "# -------------------------------------------------------\n\n"
         )
-        code = code[:import_end] + device_block + code[import_end:]
+        if import_end > 0:
+            pos = len('\n'.join(lines[:import_end]))
+            code = code[:pos] + '\n' + device_block + code[pos:]
+        else:
+            # Fallback: insert at top
+            code = device_block + code
         print("[run_codi] ✓ Inserted DEVICE constant")
         changed = True
 
