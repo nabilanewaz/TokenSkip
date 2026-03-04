@@ -337,32 +337,55 @@ def collect_latent_trace(model, tokenizer, question: str, device: str, debug_fir
         latent_embd = out.hidden_states[-1][:, -1:, :]
 
     # Decode the final answer from the last latent state
+    # NOTE: generate() does not support inputs_embeds + past_key_values well,
+    #       so we use a manual greedy decoding loop instead.
     answer_prompt = tokenizer(
         "The answer is:", return_tensors="pt", add_special_tokens=False
     )["input_ids"].to(device)
-    answer_embd = model.get_embd(model.codi, model.model_name)(answer_prompt)
-    
-    # Build attention mask for the KV cache + new tokens
-    # past_kv length + answer_embd length
-    if past_kv is not None and len(past_kv) > 0:
-        past_length = past_kv[0][0].shape[2]  # [batch, heads, seq_len, dim]
-    else:
-        past_length = 0
-    attention_mask = torch.ones(
-        (1, past_length + answer_embd.shape[1]), 
-        dtype=torch.long, 
-        device=device
-    )
+    get_embd = model.get_embd(model.codi, model.model_name)
+    answer_embd = get_embd(answer_prompt)
 
-    gen_out = model.codi.generate(
+    # Feed "The answer is:" through the model with the accumulated KV cache
+    ans_out = model.codi(
         inputs_embeds=answer_embd,
         attention_mask=attention_mask,
+        use_cache=True,
         past_key_values=past_kv,
-        max_new_tokens=32,
-        do_sample=False,
-        pad_token_id=tokenizer.eos_token_id,
     )
-    pred_text = tokenizer.decode(gen_out[0], skip_special_tokens=True)
+    past_kv = ans_out.past_key_values
+    next_logits = ans_out.logits[:, -1, :]  # [1, vocab]
+
+    # Extend attention mask for the answer prompt tokens
+    attention_mask = torch.cat([
+        attention_mask,
+        torch.ones((1, answer_embd.shape[1]), dtype=attention_mask.dtype, device=device)
+    ], dim=1)
+
+    # Manual greedy decoding
+    generated_ids = []
+    max_new_tokens = 32
+    eos_id = tokenizer.eos_token_id
+    for _ in range(max_new_tokens):
+        next_id = next_logits.argmax(dim=-1)  # [1]
+        generated_ids.append(next_id.item())
+        if next_id.item() == eos_id:
+            break
+        # Extend attention mask
+        attention_mask = torch.cat([
+            attention_mask,
+            torch.ones((1, 1), dtype=attention_mask.dtype, device=device)
+        ], dim=1)
+        next_embd = get_embd(next_id.unsqueeze(0))  # [1, 1, D]
+        out = model.codi(
+            inputs_embeds=next_embd,
+            attention_mask=attention_mask,
+            use_cache=True,
+            past_key_values=past_kv,
+        )
+        past_kv = out.past_key_values
+        next_logits = out.logits[:, -1, :]
+
+    pred_text = tokenizer.decode(generated_ids, skip_special_tokens=True)
 
     latent_stack = torch.stack(collected_latents, dim=0)  # [k, D]
     return latent_stack, pred_text
