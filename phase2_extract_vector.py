@@ -267,7 +267,7 @@ def extract_answer_number(text: str):
 
 
 @torch.no_grad()
-def collect_latent_trace(model, tokenizer, question: str, device: str):
+def collect_latent_trace(model, tokenizer, question: str, device: str, debug_first=False):
     """
     Run one forward pass through the CODI model and collect:
         - The sequence of latent embeddings h_1 … h_k  (the reasoning trace)
@@ -293,6 +293,11 @@ def collect_latent_trace(model, tokenizer, question: str, device: str):
     )
     past_kv     = outputs.past_key_values
     latent_embd = outputs.hidden_states[-1][:, -1:, :]  # [1, 1, D]
+    
+    if debug_first:
+        print(f"[DEBUG] Initial latent_embd shape: {latent_embd.shape}")
+        print(f"[DEBUG] model.use_prj: {model.use_prj}")
+        print(f"[DEBUG] model.num_latent: {model.num_latent}")
 
     collected_latents = []
     target_dtype = latent_embd.dtype
@@ -307,8 +312,11 @@ def collect_latent_trace(model, tokenizer, question: str, device: str):
             if latent_embd.dtype != target_dtype:
                 latent_embd = latent_embd.to(target_dtype)
 
-        # Store this step's latent (squeeze batch dim)
-        collected_latents.append(latent_embd[0, 0].float().cpu())
+        if debug_first and step == 0:
+            print(f"[DEBUG] After projection, latent_embd shape: {latent_embd.shape}")
+
+        # Store this step's latent (squeeze batch dim) - FIX: use all dimensions
+        collected_latents.append(latent_embd[0, 0, :].float().cpu())
 
         out = model.codi(
             inputs_embeds=latent_embd,
@@ -345,6 +353,7 @@ def collect_all_traces(model, tokenizer, steer_data: list, device: str, n_sample
     """
     records = []
     n_total = len(steer_data)
+    first_run = True
 
     for i, item in enumerate(steer_data):
         question = item.get("question", "")
@@ -353,7 +362,9 @@ def collect_all_traces(model, tokenizer, steer_data: list, device: str, n_sample
 
         for sample_idx in range(n_samples):
             try:
-                lat, pred = collect_latent_trace(model, tokenizer, question, device)
+                lat, pred = collect_latent_trace(model, tokenizer, question, device, 
+                                                  debug_first=first_run)
+                first_run = False
                 records.append({
                     "latent":    lat,
                     "pred_text": pred,
@@ -362,7 +373,13 @@ def collect_all_traces(model, tokenizer, steer_data: list, device: str, n_sample
                     "q_idx":     i,
                 })
             except Exception as e:
-                print(f"[Phase 2] ⚠  q={i} sample={sample_idx}: {e}")
+                import traceback
+                if first_run:
+                    print(f"[Phase 2] ⚠  ERROR on first run q={i} sample={sample_idx}:")
+                    traceback.print_exc()
+                    first_run = False
+                else:
+                    print(f"[Phase 2] ⚠  q={i} sample={sample_idx}: {e}")
 
         if (i + 1) % 50 == 0 or (i + 1) == n_total:
             n_pos = sum(1 for r in records
