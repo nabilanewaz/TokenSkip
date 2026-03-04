@@ -345,6 +345,12 @@ def collect_latent_trace(model, tokenizer, question: str, device: str, debug_fir
     get_embd = model.get_embd(model.codi, model.model_name)
     answer_embd = get_embd(answer_prompt)
 
+    # Extend attention mask to cover past KV entries + new answer prompt tokens
+    attention_mask = torch.cat([
+        attention_mask,
+        torch.ones((1, answer_embd.shape[1]), dtype=attention_mask.dtype, device=device)
+    ], dim=1)
+
     # Feed "The answer is:" through the model with the accumulated KV cache
     ans_out = model.codi(
         inputs_embeds=answer_embd,
@@ -354,12 +360,6 @@ def collect_latent_trace(model, tokenizer, question: str, device: str, debug_fir
     )
     past_kv = ans_out.past_key_values
     next_logits = ans_out.logits[:, -1, :]  # [1, vocab]
-
-    # Extend attention mask for the answer prompt tokens
-    attention_mask = torch.cat([
-        attention_mask,
-        torch.ones((1, answer_embd.shape[1]), dtype=attention_mask.dtype, device=device)
-    ], dim=1)
 
     # Manual greedy decoding
     generated_ids = []
