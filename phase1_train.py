@@ -246,6 +246,14 @@ def build_training_command(
         "--expt_name",          "phase1",
     ]
 
+    # Enable wandb if user is logged in
+    try:
+        import wandb
+        if wandb.api.api_key:
+            cmd.extend(["--report_to", "wandb"])
+    except:
+        pass  # wandb not available or not logged in, will use default "none"
+
     if args.bf16:
         cmd.append("--bf16")
 
