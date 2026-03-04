@@ -268,7 +268,7 @@ def run_steered_inference(
     prompt = question.strip() + "\nAnswer the above question. "
     enc = tokenizer(prompt, return_tensors="pt", truncation=True, max_length=256)
     input_ids = enc["input_ids"].to(device)
-    attention_mask = enc.get("attention_mask", torch.ones_like(input_ids))
+    attention_mask = enc.get("attention_mask", torch.ones_like(input_ids)).to(device)
 
     out = model.codi(
         input_ids=input_ids, 

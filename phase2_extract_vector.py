@@ -284,7 +284,7 @@ def collect_latent_trace(model, tokenizer, question: str, device: str, debug_fir
 
     enc = tokenizer(prompt, return_tensors="pt", truncation=True, max_length=256)
     input_ids = enc["input_ids"].to(device)
-    attention_mask = enc.get("attention_mask", torch.ones_like(input_ids))
+    attention_mask = enc.get("attention_mask", torch.ones_like(input_ids)).to(device)
 
     # Run the CODI encoder to get initial state
     outputs = model.codi(
