@@ -284,10 +284,12 @@ def collect_latent_trace(model, tokenizer, question: str, device: str, debug_fir
 
     enc = tokenizer(prompt, return_tensors="pt", truncation=True, max_length=256)
     input_ids = enc["input_ids"].to(device)
+    attention_mask = enc.get("attention_mask", torch.ones_like(input_ids))
 
     # Run the CODI encoder to get initial state
     outputs = model.codi(
         input_ids=input_ids,
+        attention_mask=attention_mask,
         use_cache=True,
         output_hidden_states=True,
     )
@@ -318,8 +320,15 @@ def collect_latent_trace(model, tokenizer, question: str, device: str, debug_fir
         # Store this step's latent (squeeze batch dim) - FIX: use all dimensions
         collected_latents.append(latent_embd[0, 0, :].float().cpu())
 
+        # Extend attention mask for new latent token
+        attention_mask = torch.cat([
+            attention_mask, 
+            torch.ones((1, 1), dtype=attention_mask.dtype, device=device)
+        ], dim=1)
+
         out = model.codi(
             inputs_embeds=latent_embd,
+            attention_mask=attention_mask,
             use_cache=True,
             output_hidden_states=True,
             past_key_values=past_kv,
@@ -332,9 +341,22 @@ def collect_latent_trace(model, tokenizer, question: str, device: str, debug_fir
         "The answer is:", return_tensors="pt", add_special_tokens=False
     )["input_ids"].to(device)
     answer_embd = model.get_embd(model.codi, model.model_name)(answer_prompt)
+    
+    # Build attention mask for the KV cache + new tokens
+    # past_kv length + answer_embd length
+    if past_kv is not None and len(past_kv) > 0:
+        past_length = past_kv[0][0].shape[2]  # [batch, heads, seq_len, dim]
+    else:
+        past_length = 0
+    attention_mask = torch.ones(
+        (1, past_length + answer_embd.shape[1]), 
+        dtype=torch.long, 
+        device=device
+    )
 
     gen_out = model.codi.generate(
         inputs_embeds=answer_embd,
+        attention_mask=attention_mask,
         past_key_values=past_kv,
         max_new_tokens=32,
         do_sample=False,

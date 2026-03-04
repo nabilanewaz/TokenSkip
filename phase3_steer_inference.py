@@ -268,8 +268,14 @@ def run_steered_inference(
     prompt = question.strip() + "\nAnswer the above question. "
     enc = tokenizer(prompt, return_tensors="pt", truncation=True, max_length=256)
     input_ids = enc["input_ids"].to(device)
+    attention_mask = enc.get("attention_mask", torch.ones_like(input_ids))
 
-    out = model.codi(input_ids=input_ids, use_cache=True, output_hidden_states=True)
+    out = model.codi(
+        input_ids=input_ids, 
+        attention_mask=attention_mask,
+        use_cache=True, 
+        output_hidden_states=True
+    )
     past_kv     = out.past_key_values
     latent_embd = out.hidden_states[-1][:, -1:, :]   # [1, 1, D]
     target_dtype = latent_embd.dtype
@@ -300,9 +306,16 @@ def run_steered_inference(
             cos_val = F.cosine_similarity(h_flat.unsqueeze(0), v_t_raw.unsqueeze(0)).item()
             cosine_sims.append(cos_val)
 
+        # Extend attention mask for new latent token
+        attention_mask = torch.cat([
+            attention_mask, 
+            torch.ones((1, 1), dtype=attention_mask.dtype, device=device)
+        ], dim=1)
+
         # ── Next latent step ─────────────────────────────────────────────────
         out = model.codi(
             inputs_embeds=latent_embd,
+            attention_mask=attention_mask,
             use_cache=True,
             output_hidden_states=True,
             past_key_values=past_kv,
@@ -315,9 +328,21 @@ def run_steered_inference(
         "The answer is:", return_tensors="pt", add_special_tokens=False
     )["input_ids"].to(device)
     answer_embd = model.get_embd(model.codi, model.model_name)(answer_prompt)
+    
+    # Build attention mask for the KV cache + new tokens
+    if past_kv is not None and len(past_kv) > 0:
+        past_length = past_kv[0][0].shape[2]  # [batch, heads, seq_len, dim]
+    else:
+        past_length = 0
+    attention_mask = torch.ones(
+        (1, past_length + answer_embd.shape[1]), 
+        dtype=torch.long, 
+        device=device
+    )
 
     gen = model.codi.generate(
         inputs_embeds=answer_embd,
+        attention_mask=attention_mask,
         past_key_values=past_kv,
         max_new_tokens=32,
         do_sample=False,
