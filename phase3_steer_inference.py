@@ -166,6 +166,48 @@ def load_codi_model(ckpt_dir: pathlib.Path, bundle_dir: pathlib.Path, bf16: bool
     )
 
     model = CODI(model_args, training_args, lora_config)
+    
+    # Load fine-tuned checkpoint from Phase 1
+    # Since train=False, init() wasn't called, so load manually
+    from safetensors.torch import load_file
+    
+    # The train.py script creates nested directories, so search for the actual model file
+    ckpt_candidates = [
+        ckpt_dir / "model.safetensors",
+        ckpt_dir / "pytorch_model.bin",
+    ]
+    
+    # Also search in nested directories created by train.py
+    for pattern in ["**/model.safetensors", "**/pytorch_model.bin"]:
+        ckpt_candidates.extend(ckpt_dir.glob(pattern))
+    
+    # Find the first valid checkpoint
+    ckpt_path = None
+    for candidate in ckpt_candidates:
+        if candidate.exists():
+            ckpt_path = candidate
+            break
+    
+    if ckpt_path:
+        print(f"[Phase 3] Loading checkpoint: {ckpt_path}")
+        if ckpt_path.suffix == ".safetensors":
+            state_dict = load_file(str(ckpt_path))
+        else:
+            state_dict = torch.load(str(ckpt_path), map_location=device)
+        
+        # Convert to float32 on CPU
+        if device == "cpu":
+            state_dict = {k: v.float() if v.is_floating_point() else v for k, v in state_dict.items()}
+        
+        # Load the state dict
+        missing, unexpected = model.load_state_dict(state_dict, strict=False)
+        if missing:
+            print(f"[Phase 3]   ⚠ Missing keys: {len(missing)} (this is normal for LoRA)")
+        if unexpected:
+            print(f"[Phase 3]   ⚠ Unexpected keys: {len(unexpected)}")
+    else:
+        print(f"[Phase 3] ⚠ No checkpoint found at {ckpt_dir}, using pretrained weights from HF")
+    
     if device == "cpu":
         model = model.float()
     model = model.to(device)
