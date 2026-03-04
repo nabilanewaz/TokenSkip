@@ -100,23 +100,17 @@ def load_from_source(source_dir):
 
 # ── Splitting logic ────────────────────────────────────────────────────────────
 
-def split(data, seed, n_llm, n_steer, n_val):
+def split(data, seed, n_llm, n_steer, n_val, n_test=None):
     """
     Shuffle data deterministically, then carve out exact counts.
-    The remainder (everything after n_llm + n_steer + n_val) becomes test.
+    If n_test is given, cap the dataset to n_llm+n_steer+n_val+n_test;
+    otherwise the remainder becomes the test set.
     """
     total = len(data)
-    n_test = total - n_llm - n_steer - n_val
+    if n_test is None:
+        n_test = total - n_llm - n_steer - n_val
 
-    if n_test < 0:
-        raise ValueError(
-            f"Dataset has only {total} examples but protocol requires "
-            f"{n_llm + n_steer + n_val} for training alone. "
-            f"Cannot create a test set."
-        )
-
-    # For mini mode, cap to exactly TOTAL_MINI so we don't use the full 8792
-    cap = n_llm + n_steer + n_val + n_test  # equals total unless mini is smaller
+    cap = n_llm + n_steer + n_val + n_test
 
     rng = random.Random(seed)
     shuffled = data.copy()
@@ -237,7 +231,7 @@ def main():
     print(f"  target : llm={n_llm}  steer={n_steer}  val={n_val}  test={n_test_target}\n")
 
     data   = load_gsm8k_hf() if args.hf else load_from_source(source_dir)
-    splits = split(data, args.seed, n_llm, n_steer, n_val)
+    splits = split(data, args.seed, n_llm, n_steer, n_val, n_test=n_test_target)
 
     print_stats(splits, mode_label)
 

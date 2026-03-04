@@ -1,31 +1,31 @@
 {
   "seed": 42,
   "mode": "MINI-500  (target 500 examples)",
-  "total": 8792,
+  "total": 500,
   "protocol": "Steering Continuous Reasoning via Latent Intervention",
   "splits": {
     "llm_train": {
       "path": "datasets\\gsm8k_split\\llm_train.jsonl",
       "n": 300,
-      "pct": 3.41,
+      "pct": 60.0,
       "protocol_label": "Dbase  (Base Training)"
     },
     "steer_train": {
       "path": "datasets\\gsm8k_split\\steer_train.jsonl",
       "n": 50,
-      "pct": 0.57,
+      "pct": 10.0,
       "protocol_label": "Dsteer (Vector Extraction)"
     },
     "validation": {
       "path": "datasets\\gsm8k_split\\validation.jsonl",
       "n": 100,
-      "pct": 1.14,
+      "pct": 20.0,
       "protocol_label": "Dfinal_train (Further Training)"
     },
     "test": {
       "path": "datasets\\gsm8k_split\\test.jsonl",
-      "n": 8342,
-      "pct": 94.88,
+      "n": 50,
+      "pct": 10.0,
       "protocol_label": "Deval  (Held-out Testing)"
     }
   },
@@ -33,7 +33,7 @@
     "llm_train": 300,
     "steer_train": 50,
     "validation": 100,
-    "test": 8342
+    "test": 50
   },
   "critical_rule": "steer_train (Dsteer) is the only split used to compute v_truth. validation (Dfinal_train) must never be used in Phase 2."
 }
