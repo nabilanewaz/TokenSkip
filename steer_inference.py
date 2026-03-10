@@ -125,30 +125,40 @@ def build_steered_script(codi_dir, eval_data, vector_dir):
     PREAMBLE = f"""
 # === STEERING GLOBALS (injected by steer_inference.py) ===
 import os as _st_os, torch as _st_torch, json as _st_json
-_ST_ALPHA        = float(_st_os.environ.get("ST_ALPHA", "0.0"))
-_ST_OUT_PATH     = _st_os.environ.get("ST_OUT_PATH", "").strip()
-_ST_VECTOR_DIR   = _st_os.environ.get("ST_VECTOR_DIR", "{vector_dir}").strip()
-_ST_USE_PER_STEP = _st_os.environ.get("ST_USE_PER_STEP", "1") == "1"
-_ST_RECORDS      = []
-_ST_STEP_IDX     = 0
+_ST_ALPHA            = float(_st_os.environ.get("ST_ALPHA", "0.0"))
+_ST_OUT_PATH         = _st_os.environ.get("ST_OUT_PATH", "").strip()
+_ST_VECTOR_DIR       = _st_os.environ.get("ST_VECTOR_DIR", "{vector_dir}").strip()
+_ST_USE_PER_STEP     = _st_os.environ.get("ST_USE_PER_STEP", "1") == "1"
+_ST_USE_RANDOM_NOISE = _st_os.environ.get("ST_USE_RANDOM_NOISE", "0") == "1"
+_ST_SEED             = int(_st_os.environ.get("ST_SEED", "42"))
+_ST_RECORDS          = []
+_ST_COS_SIMS         = []   # per-step cosine similarities
+_ST_STEP_IDX         = 0
 
 # Load v_truth and sigma at import time
 def _load_steering_vectors():
     vd = pathlib.Path(_ST_VECTOR_DIR) if "pathlib" in dir() else __import__("pathlib").Path(_ST_VECTOR_DIR)
-    v_step = _st_torch.load(str(vd / "v_truth_per_step.pt"))   # [L, D]
-    sigma  = _st_torch.load(str(vd / "sigma_per_step.pt"))     # [L]
-    v_global = _st_torch.load(str(vd / "v_truth.pt"))          # [D]
+    v_step   = _st_torch.load(str(vd / "v_truth_per_step.pt"))   # [L, D]
+    sigma    = _st_torch.load(str(vd / "sigma_per_step.pt"))     # [L]
+    v_global = _st_torch.load(str(vd / "v_truth.pt"))            # [D]
+    if _ST_USE_RANDOM_NOISE:
+        # Replace v_truth with a random unit vector of the same shape (fixed seed)
+        _rng = _st_torch.Generator(); _rng.manual_seed(_ST_SEED)
+        v_step   = _st_torch.randn_like(v_step,   generator=_rng)
+        v_global = _st_torch.randn_like(v_global, generator=_rng)
+        print(f"[steering] Random-noise mode: v_truth replaced with N(0,1) unit vectors")
     # Normalise: v_hat_t = v_t / |v_t|
-    v_hat_step = _st_torch.nn.functional.normalize(v_step, dim=-1)  # [L, D]
+    v_hat_step = _st_torch.nn.functional.normalize(v_step, dim=-1)   # [L, D]
     v_hat_glob = _st_torch.nn.functional.normalize(v_global.unsqueeze(0), dim=-1).squeeze(0)  # [D]
     return v_hat_step, sigma, v_hat_glob
 
 try:
     import pathlib as _st_pathlib
     _ST_V_HAT_STEP, _ST_SIGMA, _ST_V_HAT_GLOB = _load_steering_vectors()
-    print(f"[steering] Loaded v_truth (alpha={{_ST_ALPHA}})")
+    _st_mode = "random-noise" if _ST_USE_RANDOM_NOISE else "v_truth"
+    print(f"[steering] Loaded {{_st_mode}} (alpha={{_ST_ALPHA}})")
 except Exception as _e:
-    print(f"[steering] WARNING: Could not load v_truth: {{_e}}")
+    print(f"[steering] WARNING: Could not load steering vectors: {{_e}}")
     _ST_V_HAT_STEP = _ST_SIGMA = _ST_V_HAT_GLOB = None
 # =========================================================
 """
@@ -171,18 +181,29 @@ except Exception as _e:
     # 2. Inject steering after latent_embd assignments
     STEER_HOOK = """
 # === STEERING INJECTION (h_t+1 = h_t + alpha * sigma_l * v/|v|) ===
-if _ST_ALPHA != 0.0 and _ST_V_HAT_STEP is not None:
+if _ST_V_HAT_STEP is not None:
     _st_B, _st_L, _st_D = latent_embd.shape
     _st_dev = latent_embd.device
     if _ST_USE_PER_STEP:
         _st_v   = _ST_V_HAT_STEP.to(_st_dev)   # [L, D]
         _st_sig = _ST_SIGMA.to(_st_dev)         # [L]
-        _st_delta = (_ST_ALPHA * _st_sig.unsqueeze(-1) * _st_v).unsqueeze(0)  # [1,L,D]
+        _st_v_ref = _st_v[0]                    # first-step direction for cosine sim
     else:
         _st_v     = _ST_V_HAT_GLOB.to(_st_dev)  # [D]
         _st_sig   = _ST_SIGMA.mean().to(_st_dev)
-        _st_delta = (_ST_ALPHA * _st_sig * _st_v).view(1,1,-1)  # [1,1,D]
-    latent_embd = latent_embd + _st_delta.expand(_st_B, -1, -1)
+        _st_v_ref = _st_v                       # global direction for cosine sim
+    # Cosine similarity: mean over batch of cos(h[b,0,:], v_ref)
+    _st_h0 = latent_embd[:, 0, :].float()
+    _st_vr = _st_v_ref.float().unsqueeze(0).expand(_st_B, -1)
+    _st_cos = _st_torch.nn.functional.cosine_similarity(_st_h0, _st_vr, dim=-1).mean().item()
+    _ST_COS_SIMS.append(_st_cos)
+    # Apply intervention only when alpha != 0
+    if _ST_ALPHA != 0.0:
+        if _ST_USE_PER_STEP:
+            _st_delta = (_ST_ALPHA * _st_sig.unsqueeze(-1) * _st_v).unsqueeze(0)  # [1,L,D]
+        else:
+            _st_delta = (_ST_ALPHA * _st_sig * _st_v).view(1, 1, -1)              # [1,1,D]
+        latent_embd = latent_embd + _st_delta.expand(_st_B, -1, -1)
 # =====================================================================
 """
     def inject_steer(m):
@@ -198,12 +219,14 @@ if _ST_ALPHA != 0.0 and _ST_V_HAT_STEP is not None:
 if _ST_OUT_PATH:
     _st_preds  = locals().get("decoded", locals().get("pred_outputs", ""))
     _st_labels = locals().get("answers", locals().get("labels", ""))
+    _st_cos_mean = (sum(_ST_COS_SIMS) / len(_ST_COS_SIMS)) if _ST_COS_SIMS else None
     if isinstance(_st_preds,  str): _st_preds  = [_st_preds]
     if isinstance(_st_labels, str): _st_labels = [_st_labels]
     for _b in range(max(len(_st_preds), 1)):
         _ST_RECORDS.append({
-            "pred":  str(_st_preds[_b]  if _b < len(_st_preds)  else ""),
-            "gt":    str(_st_labels[_b] if _b < len(_st_labels) else ""),
+            "pred":     str(_st_preds[_b]  if _b < len(_st_preds)  else ""),
+            "gt":       str(_st_labels[_b] if _b < len(_st_labels) else ""),
+            "cos_sim":  _st_cos_mean,
         })
 # ===========================
 """
@@ -255,15 +278,18 @@ def extract_answer(text):
     try: return float(nums[-1]) if nums else None
     except: return None
 
-def run_alpha(codi_dir, ckpt_dir, vector_dir, alpha, args, out_dir):
-    records_path = out_dir / f"records_alpha_{alpha}.json"
-    log_path     = out_dir / f"log_alpha_{alpha}.txt"
+def run_alpha(codi_dir, ckpt_dir, vector_dir, alpha, args, out_dir, random_noise=False):
+    condition = "random_noise" if random_noise else f"alpha_{alpha}"
+    records_path = out_dir / f"records_{condition}.json"
+    log_path     = out_dir / f"log_{condition}.txt"
 
     env = os.environ.copy()
-    env["ST_ALPHA"]        = str(alpha)
-    env["ST_OUT_PATH"]     = str(records_path)
-    env["ST_VECTOR_DIR"]   = str(vector_dir)
-    env["ST_USE_PER_STEP"] = "1"
+    env["ST_ALPHA"]             = str(alpha)
+    env["ST_OUT_PATH"]          = str(records_path)
+    env["ST_VECTOR_DIR"]        = str(vector_dir)
+    env["ST_USE_PER_STEP"]      = "1"
+    env["ST_USE_RANDOM_NOISE"]  = "1" if random_noise else "0"
+    env["ST_SEED"]              = str(args.seed)
 
     cmd = [
         sys.executable, "test_steered.py",
@@ -279,7 +305,7 @@ def run_alpha(codi_dir, ckpt_dir, vector_dir, alpha, args, out_dir):
     ]
     if args.bf16: cmd.append("--bf16")
 
-    print(f"\n[steer] α={alpha} ─────────────────────────────────────────")
+    print(f"\n[steer] {condition} (α={alpha}) ─────────────────────────────────────────")
     lines = []
     proc = subprocess.Popen(cmd, cwd=str(codi_dir),
                             stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
@@ -302,6 +328,7 @@ def run_alpha(codi_dir, ckpt_dir, vector_dir, alpha, args, out_dir):
 
     # Also compute from records if available
     records_acc = None
+    mean_cos_sim = None
     if records_path.exists():
         try:
             recs = json.load(open(records_path))
@@ -310,22 +337,31 @@ def run_alpha(codi_dir, ckpt_dir, vector_dir, alpha, args, out_dir):
                           and (ga:=extract_answer(r.get("gt",""))) is not None
                           and abs(pa-ga) < 1e-4)
             records_acc = correct / len(recs) if recs else None
+            # Mean cosine similarity across all records that have it
+            cos_vals = [r["cos_sim"] for r in recs if r.get("cos_sim") is not None]
+            mean_cos_sim = sum(cos_vals) / len(cos_vals) if cos_vals else None
         except Exception as e:
             print(f"[steer] Warning: could not compute records accuracy: {e}")
 
     accuracy = records_acc if records_acc is not None else parsed_acc
 
     result = {
-        "alpha": alpha,
-        "accuracy": accuracy,
-        "accuracy_from_stdout": parsed_acc,
-        "accuracy_from_records": records_acc,
-        "n_records": len(json.load(open(records_path))) if records_path.exists() else None,
-        "exit_code": proc.returncode,
+        "alpha":                  alpha,
+        "condition":              condition,
+        "random_noise":           random_noise,
+        "accuracy":               accuracy,
+        "accuracy_from_stdout":   parsed_acc,
+        "accuracy_from_records":  records_acc,
+        "mean_cos_sim":           mean_cos_sim,
+        "n_records":              len(json.load(open(records_path))) if records_path.exists() else None,
+        "exit_code":              proc.returncode,
     }
-    (out_dir / f"alpha_{alpha}" ).mkdir(parents=True, exist_ok=True)
-    (out_dir / f"alpha_{alpha}" / "metrics.json").write_text(json.dumps(result, indent=2))
-    print(f"[steer] α={alpha}  accuracy={accuracy:.2%}" if accuracy else f"[steer] α={alpha} accuracy=N/A")
+    cond_dir = out_dir / condition
+    cond_dir.mkdir(parents=True, exist_ok=True)
+    (cond_dir / "metrics.json").write_text(json.dumps(result, indent=2))
+    acc_str = f"{accuracy:.2%}" if accuracy is not None else "N/A"
+    cos_str = f"{mean_cos_sim:.4f}" if mean_cos_sim is not None else "N/A"
+    print(f"[steer] {condition}  accuracy={acc_str}  cos_sim={cos_str}")
     return result
 
 
@@ -376,22 +412,85 @@ def compute_flip_analysis(results, out_dir):
             "net_gain": n_pos_flip - n_neg_flip,
         })
 
+# ── Flip analysis ────────────────────────────────────────────────────────
+
+def compute_flip_analysis(results, out_dir):
+    """Compare α=0 baseline against all other conditions to count flips."""
+    baseline = next((r for r in results if r["alpha"] == 0.0 and not r.get("random_noise")), None)
+    if baseline is None:
+        return
+    base_records_path = out_dir / "records_alpha_0.0.json"
+    if not base_records_path.exists():
+        return
+
+    try:
+        base_recs = json.load(open(base_records_path))
+    except:
+        return
+
+    base_correct = []
+    for r in base_recs:
+        pa = extract_answer(r.get("pred",""))
+        ga = extract_answer(r.get("gt",""))
+        base_correct.append(pa is not None and ga is not None and abs(pa-ga)<1e-4)
+
+    flip_summary = []
+    for result in results:
+        cond = result.get("condition", f"alpha_{result['alpha']}")
+        if not result.get("random_noise") and result["alpha"] == 0.0:
+            continue  # skip baseline vs itself
+        rpath = out_dir / f"records_{cond}.json"
+        if not rpath.exists():
+            continue
+        try:
+            recs = json.load(open(rpath))
+        except:
+            continue
+        if len(recs) != len(base_recs):
+            continue
+
+        n_pos_flip = 0  # wrong→right
+        n_neg_flip = 0  # right→wrong
+        for i, r in enumerate(recs):
+            pa = extract_answer(r.get("pred",""))
+            ga = extract_answer(r.get("gt",""))
+            now_correct = pa is not None and ga is not None and abs(pa-ga)<1e-4
+            if not base_correct[i] and now_correct:     n_pos_flip += 1
+            elif base_correct[i] and not now_correct:   n_neg_flip += 1
+
+        n_total_wrong = base_correct.count(False)
+        cos_vals = [r["cos_sim"] for r in recs if r.get("cos_sim") is not None]
+        mean_cos = sum(cos_vals) / len(cos_vals) if cos_vals else None
+        flip_summary.append({
+            "condition":       cond,
+            "alpha":           result["alpha"],
+            "random_noise":    result.get("random_noise", False),
+            "flip_rate_pos":   round(n_pos_flip / n_total_wrong, 4) if n_total_wrong else None,
+            "n_wrong_to_right": n_pos_flip,
+            "n_right_to_wrong": n_neg_flip,
+            "net_gain":        n_pos_flip - n_neg_flip,
+            "mean_cos_sim":    round(mean_cos, 6) if mean_cos is not None else None,
+        })
+
     (out_dir/"flip_analysis.json").write_text(json.dumps(flip_summary, indent=2))
-    print("\n[steer] Flip Analysis:")
-    print(f"  {'alpha':>6}  {'flip_rate':>10}  {'wrong→right':>12}  {'right→wrong':>12}  {'net':>6}")
+    print("\n[steer] Flip Analysis (vs CCoT baseline α=0):")
+    print(f"  {'condition':<18}  {'flip_rate':>10}  {'wrong→right':>12}  {'right→wrong':>12}  {'net':>6}  {'cos_sim':>9}")
     for f in flip_summary:
-        fr = f"{f['flip_rate_pos']:.1%}" if f['flip_rate_pos'] is not None else "N/A"
-        print(f"  {f['alpha']:>6.1f}  {fr:>10}  {f['n_wrong_to_right']:>12}  {f['n_right_to_wrong']:>12}  {f['net_gain']:>6}")
+        fr  = f"{f['flip_rate_pos']:.1%}" if f['flip_rate_pos'] is not None else "N/A"
+        cos = f"{f['mean_cos_sim']:.4f}"  if f['mean_cos_sim']  is not None else "N/A"
+        print(f"  {f['condition']:<18}  {fr:>10}  {f['n_wrong_to_right']:>12}  {f['n_right_to_wrong']:>12}  {f['net_gain']:>6}  {cos:>9}")
 
 
 # ── Main ──────────────────────────────────────────────────────────────────────
 
 def main():
     p = argparse.ArgumentParser(description="Phase 3: Inference-time steering sweep over alpha")
-    p.add_argument("--eval-data",   default=DEFAULT_EVAL_DATA)
-    p.add_argument("--vector-dir",  default=DEFAULT_VECTOR_DIR)
-    p.add_argument("--work-dir",    default=DEFAULT_WORK_DIR)
-    p.add_argument("--out-dir",     default=DEFAULT_OUT_DIR)
+    p.add_argument("--eval-data",    default=DEFAULT_EVAL_DATA)
+    p.add_argument("--vector-dir",   default=DEFAULT_VECTOR_DIR)
+    p.add_argument("--work-dir",     default=DEFAULT_WORK_DIR)
+    p.add_argument("--out-dir",      default=DEFAULT_OUT_DIR)
+    p.add_argument("--random-noise", action="store_true",
+                   help="Also run a random-noise guidance condition (control for vector direction)")
     p.add_argument("--ckpt-dir",    default=None)
     p.add_argument("--alphas",      nargs="+", type=float, default=DEFAULT_ALPHAS,
                    help=f"Alpha values to sweep (default: {DEFAULT_ALPHAS})")
@@ -407,10 +506,11 @@ def main():
 
     print("=" * 62)
     print("  Phase 3 — Steering Inference Sweep")
-    print(f"  eval data  : {eval_data}")
-    print(f"  vector dir : {vector_dir}")
-    print(f"  alphas     : {args.alphas}")
-    print(f"  out dir    : {out_dir}")
+    print(f"  eval data    : {eval_data}")
+    print(f"  vector dir   : {vector_dir}")
+    print(f"  alphas       : {args.alphas}")
+    print(f"  random noise : {args.random_noise}")
+    print(f"  out dir      : {out_dir}")
     print("=" * 62)
 
     # Validate inputs
@@ -426,39 +526,50 @@ def main():
 
     build_steered_script(codi_dir, eval_data, vector_dir)
 
-    # Run sweep
+    # Run alpha sweep
     results = []
     t0 = time()
     for alpha in sorted(args.alphas):
         result = run_alpha(codi_dir, ckpt_dir, vector_dir, alpha, args, out_dir)
         results.append(result)
 
+    # Run random-noise control condition (uses same alpha=1.0 magnitude by default)
+    if args.random_noise:
+        rn_alpha = 1.0  # same intervention magnitude as one of the sweep values
+        rn_result = run_alpha(codi_dir, ckpt_dir, vector_dir, rn_alpha, args, out_dir,
+                              random_noise=True)
+        results.append(rn_result)
+
     elapsed = time() - t0
 
     # Summary table
-    print("\n" + "=" * 62)
+    print("\n" + "=" * 72)
     print("  STEERING RESULTS SUMMARY")
-    print("=" * 62)
-    print(f"  {'alpha':>6}  {'accuracy':>10}  {'vs baseline':>12}")
-    baseline_acc = next((r["accuracy"] for r in results if r["alpha"]==0.0), None)
+    print("=" * 72)
+    print(f"  {'condition':<20}  {'alpha':>5}  {'accuracy':>10}  {'vs baseline':>12}  {'cos_sim':>9}")
+    baseline_acc = next((r["accuracy"] for r in results if r["alpha"]==0.0 and not r.get("random_noise")), None)
     for r in results:
+        cond = r.get("condition", f"alpha_{r['alpha']}")
         acc  = r["accuracy"]
-        diff = (acc - baseline_acc) if (acc and baseline_acc) else None
+        cos  = r.get("mean_cos_sim")
+        diff = (acc - baseline_acc) if (acc is not None and baseline_acc is not None) else None
         diff_str = f"{diff:+.2%}" if diff is not None else "N/A"
-        acc_str  = f"{acc:.2%}" if acc else "N/A"
-        marker   = " ← baseline" if r["alpha"] == 0.0 else ""
-        print(f"  {r['alpha']:>6.1f}  {acc_str:>10}  {diff_str:>12}{marker}")
-    print("=" * 62)
+        acc_str  = f"{acc:.2%}" if acc is not None else "N/A"
+        cos_str  = f"{cos:.4f}" if cos is not None else "N/A"
+        marker   = " ← baseline" if r["alpha"] == 0.0 and not r.get("random_noise") else ""
+        print(f"  {cond:<20}  {r['alpha']:>5.1f}  {acc_str:>10}  {diff_str:>12}  {cos_str:>9}{marker}")
+    print("=" * 72)
 
     # Flip analysis
     compute_flip_analysis(results, out_dir)
 
     # Save summary
     summary = {
-        "eval_data": str(eval_data),
-        "vector_dir": str(vector_dir),
-        "elapsed_seconds": elapsed,
-        "results": results,
+        "eval_data":        str(eval_data),
+        "vector_dir":       str(vector_dir),
+        "random_noise_run": args.random_noise,
+        "elapsed_seconds":  elapsed,
+        "results":          results,
     }
     (out_dir/"summary.json").write_text(json.dumps(summary, indent=2))
     print(f"\n[steer] Summary → {out_dir}/summary.json")

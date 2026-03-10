@@ -6,8 +6,7 @@ Splits GSM8K into the exact partition defined in the research protocol:
 
 MINI-500 MODE (default)
 -----------------------
-This version uses a ~500-example subset for fast experimentation while
-preserving the original protocol proportions:
+Fast experimentation subset (500 examples, proportional splits):
 
   llm_train       300   Base Training     — Train the base CCoT / CODI model
   steer_train      50   Vector Extraction — Compute v_truth (Dsteer)
@@ -16,8 +15,16 @@ preserving the original protocol proportions:
   ──────────────────
   TOTAL           500
 
-To use the full 8792-example dataset instead, pass --full:
-    python split_dataset.py --full
+FULL MODE (--full)
+------------------
+Full GSM8K protocol splits (7,473 train pool + 1,319 separate test set):
+
+  llm_train     4,483   Base Training     — 60% of 7,473 train pool  (Dbase)
+  steer_train     747   Vector Extraction — 10% of 7,473 train pool  (Dsteer)
+  validation    2,243   Further Training  —  30% of 7,473 train pool (Dfinal_train)
+  ────────────────────
+  TRAIN POOL    7,473
+  test          1,319   Full GSM8K test.jsonl — held-out, never touched during training
 
 Critical rule (from protocol):
   validation (Dfinal_train) must NEVER be used to compute the truth vector.
@@ -28,13 +35,13 @@ All splits are deterministic given the same seed (default 42).
 Usage
 -----
     python split_dataset.py                  # mini-500 subset (default)
-    python split_dataset.py --full           # full 8792 examples
+    python split_dataset.py --full           # full protocol (7473 train + 1319 test)
     python split_dataset.py --seed 123
     python split_dataset.py --stats          # print sizes only, no files written
     python split_dataset.py --hf             # force HuggingFace download
 """
 
-import argparse, json, pathlib, random
+import argparse, json, pathlib, random, sys
 
 
 DEFAULT_SOURCE = "datasets/gsm8k"
@@ -48,12 +55,13 @@ N_VALIDATION_MINI  = 100
 N_TEST_MINI        =  50
 TOTAL_MINI         = N_LLM_TRAIN_MINI + N_STEER_TRAIN_MINI + N_VALIDATION_MINI + N_TEST_MINI  # 500
 
-# ── Full-dataset counts (original protocol) ───────────────────────────────────
-N_LLM_TRAIN_FULL   = 6000
-N_STEER_TRAIN_FULL =  500
-N_VALIDATION_FULL  = 1500
-N_TEST_FULL        =  792
-EXPECTED_TOTAL_FULL = N_LLM_TRAIN_FULL + N_STEER_TRAIN_FULL + N_VALIDATION_FULL + N_TEST_FULL  # 8792
+# ── Full-dataset counts (thesis protocol: 60/10/30 of 7473 train pool) ──────────
+N_LLM_TRAIN_FULL   = 4483   # 60% of 7473
+N_STEER_TRAIN_FULL =  747   # 10% of 7473
+N_VALIDATION_FULL  = 2243   # 30% of 7473
+N_TEST_FULL        = 1319   # full GSM8K test.jsonl — kept separate (not from train pool)
+EXPECTED_TRAIN_POOL = N_LLM_TRAIN_FULL + N_STEER_TRAIN_FULL + N_VALIDATION_FULL  # 7473
+EXPECTED_TOTAL_FULL = EXPECTED_TRAIN_POOL + N_TEST_FULL  # 8792
 
 
 # ── I/O helpers ───────────────────────────────────────────────────────────────
@@ -83,46 +91,57 @@ def load_gsm8k_hf():
     print(f"  Loaded {len(train)} train + {len(test)} test = {len(combined)} total from HuggingFace")
     return combined
 
-def load_from_source(source_dir):
+def load_from_source(source_dir, train_only=False):
     train_path = source_dir / "train.jsonl"
     test_path  = source_dir / "test.jsonl"
-    if train_path.exists() and test_path.exists():
+    if train_path.exists():
         train = load_jsonl(train_path)
-        test  = load_jsonl(test_path)
         for ex in train: ex.setdefault("split", "original_train")
-        for ex in test:  ex.setdefault("split", "original_test")
-        combined = train + test
-        print(f"  Loaded {len(train)} train + {len(test)} test = {len(combined)} total from {source_dir}")
-        return combined
+        if train_only:
+            print(f"  Loaded {len(train)} train examples from {source_dir}")
+            return train, []
+        if test_path.exists():
+            test = load_jsonl(test_path)
+            for ex in test: ex.setdefault("split", "original_test")
+            combined = train + test
+            print(f"  Loaded {len(train)} train + {len(test)} test = {len(combined)} total from {source_dir}")
+            return combined, test
     print(f"  Local files not found at {source_dir} — trying HuggingFace...")
-    return load_gsm8k_hf()
+    hf = load_gsm8k_hf()
+    test = [ex for ex in hf if ex.get("split") == "original_test"]
+    return hf, test
 
 
 # ── Splitting logic ────────────────────────────────────────────────────────────
 
-def split(data, seed, n_llm, n_steer, n_val, n_test=None):
+def split(data, seed, n_llm, n_steer, n_val, n_test=None, separate_test=None):
     """
     Shuffle data deterministically, then carve out exact counts.
-    If n_test is given, cap the dataset to n_llm+n_steer+n_val+n_test;
-    otherwise the remainder becomes the test set.
+    If separate_test is provided (list), it is used as-is for the test split
+    and n_test is ignored.  Otherwise n_test examples are taken from data.
     """
-    total = len(data)
-    if n_test is None:
-        n_test = total - n_llm - n_steer - n_val
-
-    cap = n_llm + n_steer + n_val + n_test
-
     rng = random.Random(seed)
     shuffled = data.copy()
     rng.shuffle(shuffled)
-    shuffled = shuffled[:cap]  # take only what we need
+
+    if separate_test is not None:
+        # Full-protocol: train pool only — test comes from a separate source
+        cap = n_llm + n_steer + n_val
+        shuffled = shuffled[:cap]
+        assert len(shuffled) == cap, (
+            f"Train pool too small: need {cap}, got {len(shuffled)}")
+        test = separate_test
+    else:
+        total = len(data)
+        if n_test is None:
+            n_test = total - n_llm - n_steer - n_val
+        cap = n_llm + n_steer + n_val + n_test
+        shuffled = shuffled[:cap]
+        test = shuffled[n_llm + n_steer + n_val:]
 
     llm_train   = shuffled[:n_llm]
     steer_train = shuffled[n_llm : n_llm + n_steer]
     validation  = shuffled[n_llm + n_steer : n_llm + n_steer + n_val]
-    test        = shuffled[n_llm + n_steer + n_val :]
-
-    assert len(llm_train) + len(steer_train) + len(validation) + len(test) == len(shuffled)
 
     return {
         "llm_train":   llm_train,
@@ -214,7 +233,10 @@ def main():
     if args.full:
         n_llm, n_steer, n_val = N_LLM_TRAIN_FULL, N_STEER_TRAIN_FULL, N_VALIDATION_FULL
         n_test_target = N_TEST_FULL
-        mode_label = f"FULL  (target {EXPECTED_TOTAL_FULL} examples)"
+        mode_label = (
+            f"FULL  (train pool {EXPECTED_TRAIN_POOL}: "
+            f"llm={n_llm} steer={n_steer} val={n_val}  +  test={n_test_target} separate)"
+        )
     else:
         n_llm, n_steer, n_val = N_LLM_TRAIN_MINI, N_STEER_TRAIN_MINI, N_VALIDATION_MINI
         n_test_target = N_TEST_MINI
@@ -230,8 +252,34 @@ def main():
     print(f"  seed   : {args.seed}")
     print(f"  target : llm={n_llm}  steer={n_steer}  val={n_val}  test={n_test_target}\n")
 
-    data   = load_gsm8k_hf() if args.hf else load_from_source(source_dir)
-    splits = split(data, args.seed, n_llm, n_steer, n_val, n_test=n_test_target)
+    if args.hf:
+        combined_hf = load_gsm8k_hf()
+        hf_test  = [ex for ex in combined_hf if ex.get("split") == "original_test"]
+        hf_train = [ex for ex in combined_hf if ex.get("split") == "original_train"]
+        all_data = hf_train if args.full else combined_hf  # mini uses combined pool
+    else:
+        all_data, hf_test = load_from_source(source_dir, train_only=args.full)
+
+    if args.full:
+        # Full mode: split only the training pool; test.jsonl used verbatim
+        separate_test = hf_test if args.hf else hf_test
+        if not separate_test:
+            # fallback: load test.jsonl directly
+            tp = source_dir / "test.jsonl"
+            if tp.exists():
+                separate_test = load_jsonl(tp)
+                for ex in separate_test: ex.setdefault("split", "original_test")
+                print(f"  Loaded {len(separate_test)} test examples from {tp}")
+            else:
+                sys.exit("[split] ✗ test.jsonl not found — cannot build separate test set.")
+        data = all_data
+        splits = split(data, args.seed, n_llm, n_steer, n_val, separate_test=separate_test)
+    else:
+        # Mini mode: carve test from the combined train+test pool
+        # load_from_source(train_only=False) → (train+test combined, test_list)
+        # we use the full combined list as the shufflable pool
+        data = all_data   # already train+test when train_only=False
+        splits = split(data, args.seed, n_llm, n_steer, n_val, n_test=n_test_target)
 
     print_stats(splits, mode_label)
 

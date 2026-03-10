@@ -46,9 +46,15 @@ def build_prompts(args, test_data, tokenizer):
     Build prompt strings for every example using the model-specific template
     from model_registry.  Returns the list of prompt strings and mutates
     each example dict with example['prompt'].
+    When args.no_cot is True, uses build_no_cot_prompt if available.
     """
     cfg = get_config(args.model_type)
-    build_fn = cfg["build_prompt"]
+
+    # Select prompt builder: no-CoT version when requested
+    if getattr(args, "no_cot", False) and "build_no_cot_prompt" in cfg:
+        build_fn = cfg["build_no_cot_prompt"]
+    else:
+        build_fn = cfg["build_prompt"]
 
     prompts = []
     for example in test_data:
@@ -251,6 +257,11 @@ if __name__ == "__main__":
     parser.add_argument("--debug_samples",    type=int,   default=0,
                         help="Print this many raw model outputs after inference. Use 3-5 to diagnose prompt/extraction issues.")
     parser.add_argument("--seed",              type=int,   default=42)
+    parser.add_argument("--no-cot",            action="store_true", default=False,
+                        help="Use direct-answer prompts (no chain-of-thought). "
+                             "Requires build_no_cot_prompt in model_registry for the model type.")
+    parser.add_argument("--eval-data",         type=str,   default=None,
+                        help="Override the eval data path from configs/ with a custom JSONL file.")
     args, _ = parser.parse_known_args()
 
     # Default tokenizer path to model path if not given
@@ -282,6 +293,12 @@ if __name__ == "__main__":
         )
 
     test_conf = read_data(f"configs/{args.benchmark}_{args.data_type}.json")
+
+    # --eval-data override: replace test_path in every source with the custom file
+    if getattr(args, "eval_data", None):
+        for src in test_conf:
+            test_conf[src]["test_path"] = args.eval_data
+        print(f"[eval] Using custom eval data: {args.eval_data}")
 
     for src, info in test_conf.items():
         fname      = os.path.join(args.output_dir, "test_data", "test.jsonl")

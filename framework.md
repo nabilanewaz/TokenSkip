@@ -8,16 +8,28 @@
 Injecting this "Truth Vector" ($\mathbf{v}_{truth}$) during the continuous reasoning phase will reduce "reasoning drift" (hallucination) and improve final answer accuracy.
 
 ## Dataset Preparation (GSM8K)
-Strict data isolation is required to prevent data leakage. The GSM8K dataset will be split into two distinct subsets: Training and Testing. The training set is further split into three subsets:
+Strict data isolation is required to prevent data leakage.  The GSM8K dataset provides a **fixed test set of 1,319 examples** (never touched during training or vector extraction) and a **train pool of 7,473 examples** that is split 60/10/30 into three subsets:
 
 ### The Splits
-| Subset Name | Size | Purpose |
-| --- | --- | --- |
-| **(Base Training)** | 6,000 | Train the base CCoT model to reason.
-| **(Vector Extraction)** | 500 | Compute the  vector.
-| **(Further Training)** | 1,500 | Final testing of the hypothesis.
+| Subset Name | Variable | Size | Purpose |
+| --- | --- | --- | --- |
+| **Base Training** | $\mathcal{D}_{train}$ | 4,483 (60 %) | Train the base CCoT / LLM to reason. |
+| **Vector Extraction** | $\mathcal{D}_{steer}$ | 747 (10 %) | Compute the truth vector $\mathbf{v}_{truth}$. |
+| **Validation** | $\mathcal{D}_{val}$ | 2,243 (30 %) | Tune steering strength $\alpha$ without touching test. |
+| **Test** | $\mathcal{D}_{test}$ | 1,319 (separate) | Final held-out evaluation. |
 
-Critical Rule: The Final Set ($\mathcal{D}_{final train}$) must never be used to calculate the Truth Vector. Doing so invalidates the results.
+**Total train pool**: 4,483 + 747 + 2,243 = 7,473 (GSM8K `train.jsonl`).
+
+Critical Rule: $\mathcal{D}_{test}$ comes from the original GSM8K `test.jsonl` and is **never** used in Phase 1 or 2.  $\mathcal{D}_{steer}$ must not overlap with $\mathcal{D}_{train}$.
+
+## Models Under Investigation
+
+| Tag | Model | Backbone | Steering Path |
+| --- | --- | --- | --- |
+| `codi_gpt2` | CODI-GPT2 ([zen-E/CODI-gpt2](https://huggingface.co/zen-E/CODI-gpt2)) | GPT-2 | Patched `test.py` (steer_inference.py) |
+| `phi2` | microsoft/phi-2 | Phi-2 (2.7B) | Hook-based residual injection (hidden_steer.py) |
+| `llama32_3b` | meta-llama/Llama-3.2-3B | Llama 3.2 (3B) | Hook-based residual injection |
+| `qwen25_3b` | Qwen/Qwen2.5-3B | Qwen 2.5 (3B) | Hook-based residual injection |
 
 ## Model Architecture
 We utilize a Continuous Chain-of-Thought (CCoT) architecture (e.g., Coconut on a modified Llama-3).
@@ -49,7 +61,17 @@ $$\mathbf{v}_{truth} = \frac{1}{|H^+|} \sum_{h \in H^+} h - \frac{1}{|H^-|} \sum
 Note: Perform this calculation separately for each reasoning depth $t$ (yielding $\mathbf{v}_{truth}^t$) or average across all steps for a single global vector.
 
 ## Phase 3: Inference-Time Intervention (The Experiment)
-Goal: Test if injecting $\mathbf{v}_{truth}$ improves performance on $\mathcal{D}_{eval}$.
+Goal: Test if injecting $\mathbf{v}_{truth}$ improves performance on $\mathcal{D}_{test}$.
+
+### Evaluation Conditions
+
+| Condition | Description | $\alpha$ | Vector |
+| --- | --- | --- | --- |
+| **No CoT** | Model answers directly — no reasoning at all. | N/A | N/A |
+| **Text CoT** | Standard text chain-of-thought (discrete tokens). | N/A | N/A |
+| **CCoT (unsteered)** | Continuous CoT, no intervention. | 0.0 | — |
+| **Random Noise** | Continuous CoT + random vector injection (control). | 1.0 | $\mathcal{N}(0,1)$ |
+| **CCoT + $\mathbf{v}_{truth}$** | Continuous CoT with truth-vector steering. | swept | $\mathbf{v}_{truth}$ |
 
 ### The Steering Equation
 During the continuous reasoning loop on the Evaluation Set:
@@ -64,8 +86,15 @@ Run the evaluation loop for different values of $\alpha$:
 
 ## Phase 4: Evaluation Metrics
 We assess performance using three distinct lenses.
-- Accuracy (Performance)
-- Flip Rate: % of CCoT failures that are corrected after steering.
-- Trajectory Faithfulness (Geometric): For every step $t$, calculate cosine similarity between $h_t$ and $\mathbf{v}_{truth}$.
-- Interpretability Check (Optional): Train a linear probe to project $h_t$ back to the vocabulary. Decode the steered vs. unsteered vectors into text. Use GPT-4 to judge if the steered text represents more coherent logic.
+
+| Metric | Definition |
+| --- | --- |
+| **Accuracy** | Fraction of $\mathcal{D}_{test}$ answered correctly. |
+| **Flip Rate** | % of CCoT-wrong examples that become correct after steering ($\Delta = $ steered − unsteered). |
+| **Cosine Similarity** | $\cos(h_t, \mathbf{v}_{truth})$ averaged across all latent steps and examples — measures trajectory alignment with the truth direction. |
+
+### Aggregation Pipeline
+1. `evaluate_baselines.py` — orchestrates the full model × condition grid for HF models.
+2. `steer_inference.py --random-noise` — runs the CODI-GPT2 pipeline including the random-noise control.
+3. `compare_all.py` — reads all `metrics.json` outputs and prints/exports the final tables.
 
