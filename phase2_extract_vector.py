@@ -545,9 +545,19 @@ def main():
                         help="Traces per question. 1=greedy (fast). >1=stochastic (richer H+/H-)")
     parser.add_argument("--bf16",       action="store_true",
                         help="Use bf16 on GPU")
+    parser.add_argument("--seed",       type=int, default=42,
+                        help="Random seed for reproducibility (default: 42)")
     parser.add_argument("--skip-inference", action="store_true",
                         help="Recompute v_truth from existing latent_dump.pt (skip model run)")
     args = parser.parse_args()
+
+    # Fix random seeds for reproducibility
+    import random, numpy as np
+    random.seed(args.seed)
+    np.random.seed(args.seed)
+    torch.manual_seed(args.seed)
+    if torch.cuda.is_available():
+        torch.cuda.manual_seed_all(args.seed)
 
     steer_data_path = pathlib.Path(args.steer_data)
     out_dir         = pathlib.Path(args.out_dir)
@@ -562,6 +572,7 @@ def main():
     print(f"  Steer data : {steer_data_path}")
     print(f"  n_samples  : {args.n_samples} "
           f"({'greedy 1-pass' if args.n_samples == 1 else 'stochastic multi-pass'})")
+    print(f"  Seed       : {args.seed}")
     print(f"  Output     : {out_dir}")
     print()
 

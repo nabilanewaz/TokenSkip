@@ -571,16 +571,23 @@ def main():
         )
         base_acc = sum(1 for r in base_records if r["correct"]) / len(base_records)
 
-        sweep_results = []
+        # Always seed sweep_results with the baseline so best_alpha=0.0 is
+        # always findable even when 0.0 is not in args.alphas.
+        base_cos_vals = [r["cos_sim"] for r in base_records if r.get("cos_sim") is not None]
+        base_cos_mean = sum(base_cos_vals) / len(base_cos_vals) if base_cos_vals else None
+        sweep_results = [{
+            "alpha":        0.0,
+            "accuracy":     round(base_acc, 6),
+            "flip_rate":    None,
+            "mean_cos_sim": round(base_cos_mean, 6) if base_cos_mean is not None else None,
+        }]
         best_alpha, best_acc = 0.0, base_acc
 
         for alpha in sorted(args.alphas):
             if alpha == 0.0:
-                records  = base_records
-                accuracy = base_acc
-                flip_rate = None
-            else:
-                records = run_eval(
+                # Already in sweep_results; skip re-adding.
+                continue
+            records = run_eval(
                     model, tokenizer, args.model_type,
                     args.eval_data, collector, device,
                     alpha=alpha, v_norm=v_norm, sigma=sigma,
@@ -588,8 +595,8 @@ def main():
                     max_new_tokens=args.max_new_tokens,
                     seed=args.seed,
                 )
-                accuracy  = sum(1 for r in records if r["correct"]) / len(records)
-                flip_rate = compute_flip_rate(base_records, records)
+            accuracy  = sum(1 for r in records if r["correct"]) / len(records)
+            flip_rate = compute_flip_rate(base_records, records)
 
             cos_vals = [r["cos_sim"] for r in records if r.get("cos_sim") is not None]
             cos_mean = sum(cos_vals) / len(cos_vals) if cos_vals else None

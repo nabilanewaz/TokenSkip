@@ -609,7 +609,21 @@ def main():
     parser.add_argument("--use-global-vector", action="store_true",
                         help="Use global v_truth instead of per-step v_truth_per_step")
     parser.add_argument("--bf16",        action="store_true")
+    parser.add_argument("--random-noise", action="store_true",
+                        help="Also run a random unit-vector condition at the best/chosen alpha "
+                             "(control: proves v_truth direction matters, not just injection magnitude)")
+    parser.add_argument("--seed",         type=int, default=42,
+                        help="Random seed (default: 42)")
     args = parser.parse_args()
+
+    # Fix random seeds
+    import random as _random
+    import numpy as _np
+    _random.seed(args.seed)
+    _np.random.seed(args.seed)
+    torch.manual_seed(args.seed)
+    if torch.cuda.is_available():
+        torch.cuda.manual_seed_all(args.seed)
 
     eval_data_path = pathlib.Path(args.eval_data)
     vector_dir     = pathlib.Path(args.vector_dir)
@@ -624,6 +638,8 @@ def main():
     print(f"  Eval data  : {eval_data_path}")
     print(f"  Vector dir : {vector_dir}")
     print(f"  Alphas     : {sorted(args.alphas)}")
+    print(f"  Seed       : {args.seed}")
+    print(f"  Rand noise : {args.random_noise}")
     print(f"  Output     : {out_dir}")
     print()
 
@@ -689,6 +705,53 @@ def main():
         alphas=args.alphas,
         out_dir=out_dir,
     )
+
+    # ── Random-noise control condition ────────────────────────────────────────
+    if args.random_noise:
+        # Pick the best alpha from the sweep (or args.alphas[0] if only one given)
+        if len(all_results) > 0:
+            best_alpha = max(all_results, key=lambda r: r["accuracy"])["alpha"]
+        else:
+            best_alpha = args.alphas[0] if args.alphas else 1.0
+
+        print(f"\n[Phase 3] Running random-noise control at alpha={best_alpha} "
+              f"(seed={args.seed})...")
+        torch.manual_seed(args.seed)
+        L, D = v_hat_per_step.shape
+        rand_v = torch.randn(L, D)
+        rand_v_hat = F.normalize(rand_v, dim=-1)   # unit vectors, same shape as v_hat_per_step
+
+        rn_dir = out_dir / "random_noise"
+        rn_dir.mkdir(parents=True, exist_ok=True)
+
+        rn_results = run_alpha_sweep(
+            model, tokenizer, eval_data, device,
+            v_hat_per_step=rand_v_hat,
+            sigma_per_step=sigma,
+            alphas=[best_alpha],
+            out_dir=rn_dir,
+        )
+
+        # Re-label so it doesn't collide with steered results
+        for r in rn_results:
+            r["condition"] = "random_noise"
+            r["alpha_label"] = f"random_noise@alpha={best_alpha}"
+
+        # Save dedicated metrics
+        (rn_dir / "metrics.json").write_text(
+            json.dumps(rn_results[0] if rn_results else {}, indent=2), encoding="utf-8"
+        )
+
+        rn_acc = rn_results[0]["accuracy"] if rn_results else 0.0
+        baseline_acc = next((r["accuracy"] for r in all_results if r["alpha"] == 0.0), 0.0)
+        best_acc     = max(r["accuracy"] for r in all_results) if all_results else 0.0
+        print(f"[Phase 3] Random-noise accuracy : {rn_acc:.2%}")
+        print(f"[Phase 3] Unsteered baseline    : {baseline_acc:.2%}")
+        print(f"[Phase 3] Best v_truth steered  : {best_acc:.2%}")
+        print(f"[Phase 3] --> Direction matters : delta(v_truth)={best_acc-baseline_acc:+.2%}  "
+              f"delta(noise)={rn_acc-baseline_acc:+.2%}")
+
+        all_results.extend(rn_results)
 
     elapsed_total = time() - t_sweep
     print(f"\n[Phase 3] Sweep complete in {elapsed_total/60:.1f} min")
