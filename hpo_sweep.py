@@ -69,9 +69,10 @@ from experiment_config import (
 
 
 # ── Paths ─────────────────────────────────────────────────────────────────────
-HPO_ROOT     = PATHS["hpo_root"]
-LOG_PATH     = HPO_ROOT / "sweep_log.jsonl"
-VECTOR_ROOT  = PATHS["phase2_vectors"]
+HPO_ROOT        = PATHS["hpo_root"]
+LOG_PATH        = HPO_ROOT / "sweep_log.jsonl"
+VECTOR_ROOT     = PATHS["phase2_vectors"]
+CODI_VECTOR_DIR = PATHS["codi_vector"]
 
 
 # ── Subprocess helpers ────────────────────────────────────────────────────────
@@ -305,7 +306,7 @@ def sweep_seed(model_tag: str, model_path: str, val_data: pathlib.Path,
                 cmd = [
                     sys.executable, "phase3_steer_inference.py",
                     "--eval-data",  str(val_data),
-                    "--vector-dir", str(VECTOR_ROOT / "codi_gpt2"),
+                    "--vector-dir", str(CODI_VECTOR_DIR),
                     "--out-dir",    str(out_dir),
                     "--alphas",     str(alpha),
                     "--seed",       str(seed),
@@ -458,7 +459,7 @@ def main():
             if kind == "codi":
                 results = sweep_alpha_codi(
                     val_data=val_data,
-                    vector_dir=VECTOR_ROOT / "codi_gpt2",
+                    vector_dir=CODI_VECTOR_DIR,
                     out_root=alpha_out,
                 )
             else:

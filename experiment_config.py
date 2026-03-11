@@ -206,6 +206,7 @@ BEST_HPARAMS_PATH = pathlib.Path("outputs/hpo/best_hyperparams.json")
 PATHS = {
     "phase1_ckpt":      pathlib.Path("outputs/phase1_checkpoint"),
     "phase2_vectors":   pathlib.Path("outputs/truth_vectors"),
+    "codi_vector":      pathlib.Path("outputs/phase2_truth_vector"),
     "phase3_results":   pathlib.Path("outputs/phase3_results"),
     "eval_grid":        pathlib.Path("outputs/eval_grid"),
     "hpo_root":         pathlib.Path("outputs/hpo"),
