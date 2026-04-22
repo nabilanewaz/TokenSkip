@@ -29,44 +29,44 @@ MODELS = {
     # Llama
     'llama_3b': {
         'path': 'meta-llama/Llama-3.2-3B',
-        'type': 'llama',
-        'size': '3B',
+        'type': 'llama32_3b',
+        'size': '3b',
         'supports_steering': True,
     },
     
     # Phi
     'phi2': {
         'path': 'microsoft/phi-2',
-        'type': 'phi',
-        'size': '2.7B',
+        'type': 'phi2',
+        'size': '3b',
         'supports_steering': True,
     },
     
     # Qwen 2.5
     'qwen_3b': {
         'path': 'Qwen/Qwen2.5-3B',
-        'type': 'qwen',
-        'size': '3B',
+        'type': 'qwen25_3b',
+        'size': '3b',
         'supports_steering': True,
     },
     'qwen_1_5b': {
         'path': 'Qwen/Qwen2.5-1.5B',
-        'type': 'qwen',
-        'size': '1.5B',
+        'type': 'qwen25_3b',
+        'size': '1.5b',
         'supports_steering': True,
     },
     'qwen_0_5b': {
         'path': 'Qwen/Qwen2.5-0.5B',
-        'type': 'qwen',
-        'size': '0.5B',
+        'type': 'qwen25_3b',
+        'size': '0.5b',
         'supports_steering': True,
     },
     
     # Qwen Math
     'qwen_math_1_5b': {
         'path': 'Qwen/Qwen2.5-Math-1.5B',
-        'type': 'qwen',
-        'size': '1.5B (Math)',
+        'type': 'qwen25_3b',
+        'size': '1.5b',
         'supports_steering': True,
     },
     
@@ -74,8 +74,8 @@ MODELS = {
     'mistral_7b': {
         'path': 'mistralai/Mistral-7B-Instruct-v0.3',
         'type': 'mistral',
-        'size': '7B',
-        'supports_steering': True,
+        'size': '7b',
+        'supports_steering': False,
     },
 }
 
@@ -94,15 +94,15 @@ CONDITIONS = {
     },
     'ccot': {
         'description': 'Continuous CoT without steering',
-        'flags': ['--ccot', '--alpha', '0'],
+        'flags': [],
     },
     'random_noise': {
         'description': 'CCoT with random vector noise (control)',
-        'flags': ['--ccot', '--condition', 'random_noise'],
+        'flags': [],
     },
     'steered': {
         'description': 'CCoT with truth vector steering (parameterized by alpha)',
-        'flags': ['--ccot', '--condition', 'steered', '--alpha'],
+        'flags': [],
     },
 }
 
@@ -164,7 +164,7 @@ def setup_logging(log_dir: str, run_name: str) -> logging.Logger:
 def build_eval_command(model_tag: str, dataset: str, condition: str, 
                        alpha: Optional[float] = None, 
                        output_dir: str = None) -> List[str]:
-    """Build evaluation command for a specific model/condition/alpha combo."""
+    """Build evaluation command for no_cot/text_cot via evaluation.py."""
     
     model = MODELS[model_tag]
     ds = DATASETS[dataset]
@@ -187,8 +187,8 @@ def build_eval_command(model_tag: str, dataset: str, condition: str,
         '--data-type', 'test',
         '--eval-data', ds['test'],
         '--output-dir', result_dir,
-        '--max-new-tokens', '512',
-        '--eval-batch-size', '32',
+        '--max_new_tokens', '512',
+        '--eval_batch_size', '32',
         '--temperature', '0.0',
         '--seed', '42',
     ]
@@ -196,10 +196,37 @@ def build_eval_command(model_tag: str, dataset: str, condition: str,
     # Add condition-specific flags
     cmd.extend(cond['flags'])
     
-    # For steered condition, add alpha value
-    if condition == 'steered' and alpha is not None:
-        cmd.append(str(alpha))
-    
+    return cmd
+
+
+def build_hidden_steer_command(model_tag: str, dataset: str, condition: str,
+                               alpha_values: Optional[List[float]] = None,
+                               output_dir: str = None) -> List[str]:
+    """Build hidden_steer.py command for ccot/random_noise/steered."""
+    model = MODELS[model_tag]
+    ds = DATASETS[dataset]
+    if output_dir is None:
+        output_dir = DEFAULT_OUTPUT_DIR
+
+    result_dir = f"{output_dir}/{model_tag}/{dataset}/{condition}"
+    vector_dir = f"outputs/truth_vectors"
+
+    cmd = [
+        'python', 'hidden_steer.py',
+        '--model-path', model['path'],
+        '--model-type', model['type'],
+        '--eval-data', ds['test'],
+        '--steer-data', ds['steer'],
+        '--vector-dir', vector_dir,
+        '--out-dir', result_dir,
+        '--condition', condition,
+        '--layer-frac', '0.75',
+        '--batch-size', '4',
+        '--max-new-tokens', '512',
+        '--seed', '42',
+    ]
+    if condition == 'steered' and alpha_values:
+        cmd.extend(['--alphas'] + [str(a) for a in alpha_values])
     return cmd
 
 
@@ -286,16 +313,32 @@ class EvaluationOrchestrator:
         for condition in conditions:
             self.logger.info(f"\n  Condition: {condition}")
             model_results['conditions'][condition] = {}
+
+            if condition in ['ccot', 'random_noise', 'steered'] and not model['supports_steering']:
+                self.logger.warning(
+                    f"    Skipping {condition}: model_type '{model['type']}' is not supported by hidden_steer.py"
+                )
+                model_results['conditions'][condition]['skipped'] = True
+                continue
             
-            if condition == 'steered':
-                # Sweep alpha values for steered condition
-                for alpha in alpha_values:
-                    cmd = build_eval_command(
-                        model_tag, dataset, condition, alpha,
-                        str(self.output_dir)
-                    )
-                    self._run_command(cmd, model_tag, condition, alpha, dry_run)
-                    model_results['conditions'][condition][f'alpha_{alpha}'] = True
+            if condition in ['ccot', 'random_noise']:
+                cmd = build_hidden_steer_command(
+                    model_tag, dataset, condition,
+                    None,
+                    str(self.output_dir)
+                )
+                self._run_command(cmd, model_tag, condition, None, dry_run)
+                model_results['conditions'][condition]['completed'] = True
+
+            elif condition == 'steered':
+                cmd = build_hidden_steer_command(
+                    model_tag, dataset, condition,
+                    alpha_values,
+                    str(self.output_dir)
+                )
+                self._run_command(cmd, model_tag, condition, None, dry_run)
+                model_results['conditions'][condition]['alphas'] = alpha_values
+                model_results['conditions'][condition]['completed'] = True
             else:
                 # Single run for non-steered conditions
                 cmd = build_eval_command(
@@ -397,13 +440,17 @@ def print_command_matrix():
         ('phi2', 'gsm8k', 'text_cot', None),
         ('qwen_3b', 'gsm8k', 'ccot', None),
         ('qwen_3b', 'gsm8k', 'random_noise', None),
-        ('qwen_3b', 'gsm8k', 'steered', 0.5),
-        ('qwen_3b', 'gsm8k', 'steered', 5),
-        ('llama_3b', 'gsm8k', 'steered', -1),
+        ('qwen_3b', 'gsm8k', 'steered', None),
     ]
     
     for model_tag, dataset, condition, alpha in examples:
-        cmd = build_eval_command(model_tag, dataset, condition, alpha)
+        if condition in ['ccot', 'random_noise', 'steered']:
+            cmd = build_hidden_steer_command(
+                model_tag, dataset, condition,
+                ALPHA_VALUES if condition == 'steered' else None
+            )
+        else:
+            cmd = build_eval_command(model_tag, dataset, condition, alpha)
         print(f"\n# Model: {model_tag}, Condition: {condition}" + 
               (f", Alpha: {alpha}" if alpha is not None else ""))
         print(" ".join(cmd))
