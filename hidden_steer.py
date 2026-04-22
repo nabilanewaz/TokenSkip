@@ -453,7 +453,7 @@ def main():
     )
     p.add_argument("--model-path",  required=True)
     p.add_argument("--model-type",  required=True,
-                   choices=["phi2", "llama32_3b", "qwen25_3b"])
+                   choices=["phi2", "llama32_3b", "qwen25_3b", "qwen25_1_5b", "qwen25_0_5b", "qwen_math_1_5b"])
     p.add_argument("--eval-data",   default=DEFAULT_EVAL_DATA)
     p.add_argument("--steer-data",  default=DEFAULT_STEER_DATA)
     p.add_argument("--vector-dir",  default=DEFAULT_VECTOR_DIR)

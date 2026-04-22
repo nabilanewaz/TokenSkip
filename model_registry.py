@@ -314,7 +314,41 @@ MODEL_CONFIGS = {
         "stop_sequences":      _default_stop,
         "cot_split":           "\nAnswer:",
         "lora_template":       "qwen",
-    },}
+    },
+
+    # ── Qwen/Qwen2.5-1.5B (base model) ────────────────────────────────────────
+    # Use: --model-type qwen25_1_5b --model-path Qwen/Qwen2.5-1.5B
+    "qwen25_1_5b": {
+        "build_prompt":        _qwen25_base_prompt,
+        "build_no_cot_prompt": _base_no_cot_prompt,
+        "cot_field":           "model_output",
+        "stop_sequences":      _default_stop,
+        "cot_split":           "\nAnswer:",
+        "lora_template":       "qwen",
+    },
+
+    # ── Qwen/Qwen2.5-0.5B (base model) ────────────────────────────────────────
+    # Use: --model-type qwen25_0_5b --model-path Qwen/Qwen2.5-0.5B
+    "qwen25_0_5b": {
+        "build_prompt":        _qwen25_base_prompt,
+        "build_no_cot_prompt": _base_no_cot_prompt,
+        "cot_field":           "model_output",
+        "stop_sequences":      _default_stop,
+        "cot_split":           "\nAnswer:",
+        "lora_template":       "qwen",
+    },
+
+    # ── Qwen/Qwen2.5-Math-1.5B (base model) ────────────────────────────────────
+    # Use: --model-type qwen_math_1_5b --model-path Qwen/Qwen2.5-Math-1.5B
+    "qwen_math_1_5b": {
+        "build_prompt":        _qwen25_base_prompt,
+        "build_no_cot_prompt": _base_no_cot_prompt,
+        "cot_field":           "model_output",
+        "stop_sequences":      _default_stop,
+        "cot_split":           "\nAnswer:",
+        "lora_template":       "qwen",
+    },
+}
 
 
 def get_config(model_type: str) -> dict:
