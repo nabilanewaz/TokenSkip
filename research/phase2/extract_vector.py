@@ -36,16 +36,18 @@ ALL_MODEL_TYPES  = ["phi2","llama32_3b","qwen25_3b","qwen25_1_5b","qwen25_0_5b"]
 
 class ExtractionHook:
     def __init__(self):
-        self.hidden_state = None
+        self.hidden_steps = []
         self._handle = None
 
     def register(self, layer):
         def _hook(module, inputs, output):
             h = output[0] if isinstance(output, tuple) else output
-            # Capture the hidden state of the LAST token in the sequence
-            self.hidden_state = h[:, -1, :].detach().cpu()
+            self.hidden_steps.append(h[:, -1, :].detach().cpu())
             return output
         self._handle = layer.register_forward_hook(_hook)
+
+    def reset(self):
+        self.hidden_steps = []
 
     def remove(self):
         if self._handle:
@@ -81,56 +83,83 @@ def load_model(model_path, device, lora_dir=None):
     model.eval()
     return model, tok
 
-def extract_truth_vector(model, tokenizer, model_type, steer_data_path, hook_layer, device, max_new=512):
+def extract_truth_vector(model, tokenizer, model_type, steer_data_path, hook_layer, device, n_samples=5, temperature=1.0, use_per_step=True, max_new=512):
     mcfg = get_model_cfg(model_type)
     steer_data = load_jsonl(steer_data_path)
-    
+
     hook = ExtractionHook()
     hook.register(hook_layer)
-    
+
     pos_h, neg_h = [], []
+    pos_step_sums, neg_step_sums = {}, {}
+    pos_step_counts, neg_step_counts = {}, {}
     n_total = len(steer_data)
-    
-    print(f"\n[Phase 2] Extracting v_truth from {n_total} traces …")
+
+    print(f"\n[Phase 2] Extracting v_truth from {n_total} questions x {n_samples} samples...")
     t0 = time()
-    
+
     for i, item in enumerate(steer_data):
         q  = get_question(item)
         gt = get_gt_answer(item)
         prompt = mcfg["build_prompt"](q, tokenizer, 1.0)
-        
         enc = tokenizer(prompt, return_tensors="pt", truncation=True, max_length=512).to(device)
-        with torch.no_grad():
-            out = model.generate(**enc, max_new_tokens=max_new, do_sample=False, pad_token_id=tokenizer.pad_token_id)
-        
-        # hook.hidden_state was captured during generate (first pass)
-        h_t = hook.hidden_state
-        
-        pred_text = tokenizer.decode(out[0, enc["input_ids"].shape[1]:], skip_special_tokens=True)
-        if answers_match(pred_text, gt):
-            pos_h.append(h_t)
-        else:
-            neg_h.append(h_t)
-            
+
+        for _ in range(n_samples):
+            hook.reset()
+            gen_kwargs = {
+                "max_new_tokens": max_new,
+                "pad_token_id": tokenizer.pad_token_id,
+                "do_sample": (n_samples > 1),
+            }
+            if n_samples > 1:
+                gen_kwargs["temperature"] = temperature
+            with torch.no_grad():
+                out = model.generate(**enc, **gen_kwargs)
+            if not hook.hidden_steps:
+                continue
+
+            traj = torch.cat(hook.hidden_steps, dim=0).float()  # [steps, hidden]
+            pred_text = tokenizer.decode(out[0, enc["input_ids"].shape[1]:], skip_special_tokens=True)
+            is_pos = answers_match(pred_text, gt)
+            (pos_h if is_pos else neg_h).append(traj.mean(dim=0, keepdim=True))
+
+            if use_per_step:
+                for t in range(traj.shape[0]):
+                    step_vec = traj[t]
+                    if is_pos:
+                        pos_step_sums[t] = pos_step_sums.get(t, torch.zeros_like(step_vec)) + step_vec
+                        pos_step_counts[t] = pos_step_counts.get(t, 0) + 1
+                    else:
+                        neg_step_sums[t] = neg_step_sums.get(t, torch.zeros_like(step_vec)) + step_vec
+                        neg_step_counts[t] = neg_step_counts.get(t, 0) + 1
+
         if (i+1) % 50 == 0 or (i+1) == n_total:
             print(f"  [{i+1}/{n_total}] H+: {len(pos_h)}  H-: {len(neg_h)}")
 
     hook.remove()
     print(f"[Phase 2] Generation done in {time()-t0:.1f}s")
-    
+
     if len(pos_h) == 0 or len(neg_h) == 0:
         raise ValueError(f"Need BOTH H+ and H- to compute v_truth. Got H+: {len(pos_h)}, H-: {len(neg_h)}")
-        
+
     pos_stack = torch.cat(pos_h, dim=0).float()
     neg_stack = torch.cat(neg_h, dim=0).float()
-    
     v_truth = pos_stack.mean(dim=0) - neg_stack.mean(dim=0)
     v_norm  = F.normalize(v_truth.unsqueeze(0), dim=-1).squeeze(0)
-    
+
+    per_step = {}
+    if use_per_step:
+        common_steps = sorted(set(pos_step_sums.keys()) & set(neg_step_sums.keys()))
+        for t in common_steps:
+            if pos_step_counts.get(t, 0) == 0 or neg_step_counts.get(t, 0) == 0:
+                continue
+            p = pos_step_sums[t] / pos_step_counts[t]
+            n = neg_step_sums[t] / neg_step_counts[t]
+            per_step[str(t)] = F.normalize((p - n).unsqueeze(0), dim=-1).squeeze(0)
+
     all_stack = torch.cat([pos_stack, neg_stack], dim=0)
     sigma = float(all_stack.std(dim=0).mean())
-    
-    return v_norm, sigma, len(pos_h), len(neg_h)
+    return v_norm, sigma, len(pos_h), len(neg_h), per_step
 
 def main():
     p = argparse.ArgumentParser()
@@ -148,8 +177,11 @@ def main():
     
     print(f"\n[Phase 2] Truth Vector Extraction | model={args.model_type} | layer={layer_idx}/{n_layers-1}")
     
-    v_norm, sigma, n_pos, n_neg = extract_truth_vector(
-        model, tokenizer, args.model_type, args.steer_data, hook_layer, device
+    v_norm, sigma, n_pos, n_neg, per_step = extract_truth_vector(
+        model, tokenizer, args.model_type, args.steer_data, hook_layer, device,
+        n_samples=_P1.get("n_samples", 5),
+        temperature=_P1.get("temperature", 1.0),
+        use_per_step=_P1.get("use_per_step", True),
     )
     
     out_dir = pathlib.Path(args.out_root) / args.model_type
@@ -157,6 +189,8 @@ def main():
     
     torch.save(v_norm, out_dir / "v_truth.pt")
     torch.save(torch.tensor(sigma), out_dir / "sigma.pt")
+    if per_step:
+        torch.save({k: v.cpu() for k, v in per_step.items()}, out_dir / "v_truth_per_step.pt")
     
     stats = {
         "model": args.model_type,
@@ -164,7 +198,11 @@ def main():
         "n_neg": n_neg,
         "balance": n_pos / (n_pos + n_neg),
         "sigma": sigma,
-        "v_norm_len": v_norm.shape[0]
+        "v_norm_len": v_norm.shape[0],
+        "n_samples": _P1.get("n_samples", 5),
+        "temperature": _P1.get("temperature", 1.0),
+        "use_per_step": _P1.get("use_per_step", True),
+        "n_per_step_vectors": len(per_step)
     }
     (out_dir / "stats.json").write_text(json.dumps(stats, indent=2), encoding="utf-8")
     
