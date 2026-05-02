@@ -1,0 +1,117 @@
+# ============================================================
+# Research Protocol: Steering Continuous Reasoning via Latent Intervention
+# ============================================================
+# Single source of truth for all hyperparameters.
+# Every script reads from this file; edit here to change the experiment.
+
+# ── Dataset ──────────────────────────────────────────────────────────────────
+dataset:
+  seed: 42                       # Deterministic shuffle seed (never change)
+  full_mode: true                # true = full GSM8K | false = mini-500 (dev)
+
+  # Full-protocol splits (60/10/30 of 7,473 train pool + 1,319 separate test)
+  splits:
+    llm_train:   4483            # 60%  — (unused in pure inference)
+    steer_train:  747            # 10%  — Phase 1 vector extraction    (D_steer)
+    validation:  2243            # 30%  — Validation / alpha tuning    (D_val)
+    test:        1319            # GSM8K test.jsonl — NEVER touched in Phase 1/2
+
+  # Mini-500 splits (fast local development / smoke tests)
+  mini_splits:
+    llm_train:   300
+    steer_train:  50
+    validation:  100
+    test:         50
+
+  source_dir:  "datasets/gsm8k"
+  out_dir:     "datasets/gsm8k_split"
+
+# ── Phase 1: Truth Vector Extraction ─────────────────────────────────────────
+phase1:
+  # For each question in D_steer, run n_samples forward passes at T=1.0.
+  # Traces classified H+ (correct) and H- (incorrect).
+  # v_truth^t = mean(H+^t) - mean(H-^t)
+  n_samples:    5                # 1 = greedy (fast) | >=3 = stochastic (better)
+  temperature:  1.0
+  use_per_step: true             # true = per-step v_truth^t | false = global mean
+  output_dir:   "outputs/phase1_truth_vector"
+
+# ── Phase 2: Inference-Time Intervention ─────────────────────────────────────
+phase2:
+  # Steering equation: h_{t+1} = Model(h_t) + α · σ_l · v̂_truth
+  #
+  # Full 9-value sweep from the protocol (§ Hyperparameter Sweep)
+  alpha_sweep:  [0.0, 0.1, 0.5, 1.0, 2.0, 5.0, 10.0, 20.0, 50.0]
+
+  # α = 0.0 is the CCoT unsteered baseline (control group)
+  # α = 1.0 is used for the random-noise control condition
+
+  output_dir:             "outputs/phase2_results"
+  intervention_layer_frac: 0.75   # Hook layer for HF models (last quarter)
+  max_new_tokens:         512
+  batch_size:             4
+
+# ── Models Under Investigation ────────────────────────────────────────────────
+models:
+  codi_gpt2:
+    hf_id:    "zen-E/CODI-gpt2"
+    backbone: "gpt2"
+    type:     "codi"
+    steering: "steer_inference.py"   # uses patched CODI inference loop
+
+  phi2:
+    hf_id:    "microsoft/phi-2"
+    type:     "phi2"
+    steering: "hidden_steer.py"      # hook-based residual injection
+
+  llama32_3b:
+    hf_id:    "meta-llama/Llama-3.2-3B"
+    type:     "llama32_3b"
+    steering: "hidden_steer.py"
+
+  qwen25_3b:
+    hf_id:    "Qwen/Qwen2.5-3B"
+    type:     "qwen25_3b"
+    steering: "hidden_steer.py"
+
+  qwen25_1_5b:
+    hf_id:    "Qwen/Qwen2.5-1.5B"
+    type:     "qwen25_1_5b"
+    steering: "hidden_steer.py"
+
+  qwen25_0_5b:
+    hf_id:    "Qwen/Qwen2.5-0.5B"
+    type:     "qwen25_0_5b"
+    steering: "hidden_steer.py"
+
+# ── Evaluation ────────────────────────────────────────────────────────────────
+eval:
+  # All 5 conditions from the protocol evaluation table
+  conditions:  ["no_cot", "text_cot", "ccot", "random_noise", "steered"]
+  out_root:    "outputs/eval_grid"
+  vector_root: "outputs/truth_vectors"
+
+# ── TokenSkip Compression ────────────────────────────────────────────────────
+tokenskip:
+  # LLMLingua-2 model for text CoT compression
+  llmlingua_model: "llmlingua-2-xlm-roberta-large-meetingbank"
+
+  # Text CoT compression ratios (1.0 = no compression = baseline)
+  ratios: [0.5, 0.6, 0.7, 0.8, 0.9, 1.0]
+
+  # Fraction of CODI-GPT2 latent steps to KEEP (1.0 = keep all)
+  latent_skip_ratios: [0.33, 0.5, 0.67, 1.0]
+
+  # LLMLingua options
+  force_reserve_digits: true        # always keep numeric tokens
+  force_tokens_llama: ["Step", ":"] # preserve step markers for Llama-3
+
+# ── Phase 4: Metrics ──────────────────────────────────────────────────────────
+metrics:
+  # accuracy           — fraction of D_test answered correctly
+  # flip_rate          — % of CCoT-wrong corrected by steering
+  # cosine_similarity  — cos(h_t, v_truth) averaged over all steps and examples
+  # token_count        — average reasoning tokens during CCoT
+  # trajectory_faith   — avg cos-sim between consecutive hidden states
+  # latency            — avg inference time per example (seconds)
+  answer_tolerance: 1.0e-4      # numeric tolerance for answer comparison

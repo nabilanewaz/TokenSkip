@@ -1,0 +1,45 @@
+# ============================================================
+# research/requirements.txt
+# Pinned for RunPod (CUDA 12.x, Python 3.10+).
+#
+# CODI-GPT2 Phases 1-3 impose the strictest version constraints:
+#   transformers==4.52.4  (CODI LoRA compatibility)
+#   peft==0.15.2          (LoRA r=128, lora_init flag)
+#   accelerate==1.7.0     (training stability)
+#
+# Install:
+#   pip install -r research/requirements.txt
+# ============================================================
+
+# ── Core ML ──────────────────────────────────────────────────────────────────
+torch>=2.1.0
+transformers==4.52.4
+peft==0.15.2
+accelerate==1.7.0
+safetensors>=0.4.3
+
+# ── Data ─────────────────────────────────────────────────────────────────────
+datasets>=2.14.0
+huggingface_hub>=0.24.0
+
+# ── Numerics ─────────────────────────────────────────────────────────────────
+numpy>=1.24.0
+scipy>=1.10.0
+
+# ── Config / I/O ─────────────────────────────────────────────────────────────
+pyyaml>=6.0
+tqdm>=4.65.0
+
+# ── Tokenization ─────────────────────────────────────────────────────────────
+sentencepiece>=0.1.99
+
+# ── TokenSkip (LLMLingua-2 CoT compression) ──────────────────────────────────
+llmlingua>=0.2.1          # text CoT compression
+
+# ── Optional: Experiment tracking ────────────────────────────────────────────
+# wandb>=0.16.0
+
+# ── Optional: Visualization ──────────────────────────────────────────────────
+# matplotlib>=3.7.0
+# pandas>=2.0.0
+# seaborn>=0.12.0

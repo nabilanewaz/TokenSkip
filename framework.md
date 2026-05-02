@@ -2,7 +2,7 @@
 # Research Protocol: Steering Continuous Reasoning via Latent Intervention
 
 ## Abstract & Hypothesis
-**Objective**: To investigate whether reasoning in a continuous latent space (as seen in Coconut/CCoT architectures) can be "steered" toward factuality using a linear intervention vector derived from the model's own activations.
+**Objective**: To investigate whether reasoning in a continuous latent space (as seen in Tokenskip architecture) can be "steered" toward factuality using a linear intervention vector derived from the model's own activations.
 
 **Hypothesis**: Truthfulness and logical validity are encoded as linear directions in the high-dimensional latent space of the model.
 Injecting this "Truth Vector" ($\mathbf{v}_{truth}$) during the continuous reasoning phase will reduce "reasoning drift" (hallucination) and improve final answer accuracy.
@@ -30,15 +30,17 @@ Critical Rule: $\mathcal{D}_{test}$ comes from the original GSM8K `test.jsonl` a
 | `phi2` | microsoft/phi-2 | Phi-2 (2.7B) | Hook-based residual injection (hidden_steer.py) |
 | `llama32_3b` | meta-llama/Llama-3.2-3B | Llama 3.2 (3B) | Hook-based residual injection |
 | `qwen25_3b` | Qwen/Qwen2.5-3B | Qwen 2.5 (3B) | Hook-based residual injection |
+| `qwen25_0.5b` | Qwen/Qwen2.5-0.5B | Qwen 2.5 (0.5B) | Hook-based residual injection |
+| `qwen25_1.5b` | Qwen/Qwen2.5-1.5B | Qwen 2.5 (1.5B) | Hook-based residual injection |
 
 ## Model Architecture
-We utilize a Continuous Chain-of-Thought (CCoT) architecture (e.g., Coconut on a modified Llama-3).
+We utilize a Continuous Chain-of-Thought (CCoT) architecture
 - **Input**: Text tokens $x$.
 - **Reasoning Phase**: A sequence of $k$ continuous hidden states $h_1, h_2, \dots, h_k$ where $h_t \in \mathbb{R}^d$. These are not decoded into text during training.
 - **Output**: Final answer tokens $y$.
 - **Mechanism**: The model operates in "Latent Mode," feeding the hidden state $h_t$ back into the input for step $t+1$ without passing through a discrete softmax layer.
 
-## Phase 1: Base Model Training (Coconut paper)
+## Phase 1: Base Model Training
 - Goal: Create a model capable of continuous reasoning, even if imperfect.
 - Format: Convert GSM8K examples into the format: Question -> [RAT_START] -> (Reasoning Steps) -> [RAT_END] -> Answer.
 - Curriculum Learning:
@@ -81,7 +83,7 @@ $\alpha$ (Steering Strength): A scalar hyperparameter controlling the interventi
 
 ### Hyperparameter Sweep
 Run the evaluation loop for different values of $\alpha$:
-- $\alpha \in \{0.0, 0.1, 0.5, 1.0, 2.0, 5.0\}$
+- $\alpha \in \{0.0, 0.1, 0.5, 1.0, 2.0, 5.0, 10.0, 20.0, 50.0\}$
 - $\alpha = 0.0$ is the Baseline (Control Group).
 
 ## Phase 4: Evaluation Metrics
@@ -92,6 +94,9 @@ We assess performance using three distinct lenses.
 | **Accuracy** | Fraction of $\mathcal{D}_{test}$ answered correctly. |
 | **Flip Rate** | % of CCoT-wrong examples that become correct after steering ($\Delta = $ steered − unsteered). |
 | **Cosine Similarity** | $\cos(h_t, \mathbf{v}_{truth})$ averaged across all latent steps and examples — measures trajectory alignment with the truth direction. |
+| **Token Count** | Average number of reasoning tokens used during CCoT. |
+| **Trajectory Faithfulness** | Average cosine similarity between consecutive hidden states — measures the coherence of the reasoning trajectory. |
+| **Latency** | Average inference time per example — measures the overhead of the continuous reasoning process. |
 
 ### Aggregation Pipeline
 1. `evaluate_baselines.py` — orchestrates the full model × condition grid for HF models.
