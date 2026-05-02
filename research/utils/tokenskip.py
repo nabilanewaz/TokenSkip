@@ -100,8 +100,13 @@ def batch_compress(
     ratio: float,
     model_type: str = "phi2",
     llmlingua_model_name: str = "llmlingua-2-xlm-roberta-large-meetingbank",
+    device=None,
 ) -> list[dict]:
-    """Compress a batch of CoT strings. Returns one result dict per string."""
+    """Compress a batch of CoT strings. Returns one result dict per string.
+
+    `device` is accepted for backward compatibility and intentionally ignored
+    because LLMLingua PromptCompressor manages device placement internally.
+    """
     return [
         compress_cot_text(t, ratio, model_type, llmlingua_model_name)
         for t in cot_texts
