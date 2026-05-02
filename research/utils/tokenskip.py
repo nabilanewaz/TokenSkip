@@ -22,20 +22,12 @@ _LLMLINGUA_MODEL: Optional[object] = None
 _LLMLINGUA_NAME:  Optional[str]    = None
 
 
-def _normalize_llmlingua_model_name(model_name: str) -> str:
-    """Normalize legacy LLMLingua repo ids to HF canonical ids."""
-    if model_name == "llmlingua-2-xlm-roberta-large-meetingbank":
-        return "microsoft/llmlingua-2-xlm-roberta-large-meetingbank"
-    return model_name
-
-
 def get_llmlingua(model_name: str = "microsoft/llmlingua-2-xlm-roberta-large-meetingbank"):
     """
     Lazy-load and cache a LLMLingua-2 PromptCompressor.
     Safe to call multiple times — returns the cached instance.
     """
-    if model_name == "llmlingua-2-xlm-roberta-large-meetingbank":
-        model_name = "microsoft/llmlingua-2-xlm-roberta-large-meetingbank"
+    model_name = _normalize_llmlingua_model_name(model_name)
     global _LLMLINGUA_MODEL, _LLMLINGUA_NAME
     if _LLMLINGUA_MODEL is not None and _LLMLINGUA_NAME == model_name:
         return _LLMLINGUA_MODEL
@@ -120,7 +112,7 @@ def batch_compress(
     cot_texts: list[str],
     ratio: float,
     model_type: str = "phi2",
-    llmlingua_model_name: str = "microsoft/llmlingua-2-xlm-roberta-large-meetingbank",
+    llmlingua_model_name: str = "llmlingua-2-xlm-roberta-large-meetingbank",
     device=None,
 ) -> list[dict]:
     """Compress a batch of CoT strings. Returns one result dict per string.

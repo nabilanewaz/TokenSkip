@@ -80,11 +80,7 @@ def prepare_dataset(data: list[dict], tokenizer, model_type: str, ratio: float, 
 
     print(f"[Phase 1] Compressing {len(reasons)} reasoning chains at ratio {ratio} via TokenSkip...")
     t0 = time()
-    # Backward/forward compatible call: some environments still pass/expect `device`.
-    try:
-        compressed = batch_compress(reasons, ratio, model_type, device=device)
-    except TypeError:
-        compressed = batch_compress(reasons, ratio, model_type)
+    compressed = batch_compress(reasons, ratio, model_type)
     print(f"[Phase 1] Compression done in {time()-t0:.1f}s")
 
     for q, comp, ans in zip(questions, compressed, answers):
@@ -96,7 +92,7 @@ def prepare_dataset(data: list[dict], tokenizer, model_type: str, ratio: float, 
         full_text = prefix + target
 
         tok_full = tokenizer(full_text, truncation=True, max_length=1024)
-        tok_prefix = tokenizer(prefix, truncation=True, max_length=1024)
+        tok_prefix = tokenizer(prefix, truncation=True, max_length=1024, add_special_tokens=False)
         input_ids = tok_full["input_ids"]
         attn = tok_full["attention_mask"]
         labels = [-100] * len(input_ids)
