@@ -42,7 +42,7 @@ DEFAULT_TRAIN = str(pathlib.Path(_DS.get("out_dir", "datasets/gsm8k_split")) / "
 DEFAULT_OUT   = "outputs/phase1_checkpoint"
 ALL_MODEL_TYPES = ["phi2","llama32_3b","qwen25_3b","qwen25_1_5b","qwen25_0_5b"]
 
-def prepare_dataset(data: list[dict], tokenizer, model_type: str, ratio: float, device: torch.device):
+def prepare_dataset(data: list[dict], tokenizer, model_type: str, ratio: float):
     """Pre-compresses CoT, formats samples, and masks loss to final answer span only."""
     mcfg = get_model_cfg(model_type)
 
@@ -131,7 +131,7 @@ def main():
     if tokenizer.pad_token is None:
         tokenizer.pad_token = tokenizer.eos_token
         
-    train_dataset = prepare_dataset(raw_data, tokenizer, args.model_type, args.ratio, device)
+    train_dataset = prepare_dataset(raw_data, tokenizer, args.model_type, args.ratio)
 
     dtype = torch.bfloat16 if device.type == "cuda" and torch.cuda.is_bf16_supported() else torch.float16 if device.type == "cuda" else torch.float32
     
