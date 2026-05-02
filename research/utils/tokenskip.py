@@ -22,11 +22,20 @@ _LLMLINGUA_MODEL: Optional[object] = None
 _LLMLINGUA_NAME:  Optional[str]    = None
 
 
-def get_llmlingua(model_name: str = "llmlingua-2-xlm-roberta-large-meetingbank"):
+def _normalize_llmlingua_model_name(model_name: str) -> str:
+    """Normalize legacy LLMLingua repo ids to HF canonical ids."""
+    if model_name == "llmlingua-2-xlm-roberta-large-meetingbank":
+        return "microsoft/llmlingua-2-xlm-roberta-large-meetingbank"
+    return model_name
+
+
+def get_llmlingua(model_name: str = "microsoft/llmlingua-2-xlm-roberta-large-meetingbank"):
     """
     Lazy-load and cache a LLMLingua-2 PromptCompressor.
     Safe to call multiple times — returns the cached instance.
     """
+    if model_name == "llmlingua-2-xlm-roberta-large-meetingbank":
+        model_name = "microsoft/llmlingua-2-xlm-roberta-large-meetingbank"
     global _LLMLINGUA_MODEL, _LLMLINGUA_NAME
     if _LLMLINGUA_MODEL is not None and _LLMLINGUA_NAME == model_name:
         return _LLMLINGUA_MODEL
@@ -37,10 +46,13 @@ def get_llmlingua(model_name: str = "llmlingua-2-xlm-roberta-large-meetingbank")
             "LLMLingua is required for TokenSkip: pip install llmlingua"
         )
     print(f"  [tokenskip] Loading LLMLingua-2 compressor: {model_name} …")
-    _LLMLINGUA_MODEL = PromptCompressor(model_name=model_name, use_llmlingua2=True)
-    _LLMLINGUA_NAME  = model_name
-    print(f"  [tokenskip] ✓ Compressor ready")
-    return _LLMLINGUA_MODEL
+    try:
+        _LLMLINGUA_MODEL = PromptCompressor(model_name=model_name, use_llmlingua2=True)
+        _LLMLINGUA_NAME = model_name
+        print("  [tokenskip] ✓ Compressor ready")
+        return _LLMLINGUA_MODEL
+    except Exception as e:
+        raise RuntimeError(f"Failed to load LLMLingua model '{model_name}': {e}") from e
 
 
 # ── Text CoT compression ──────────────────────────────────────────────────────
@@ -49,7 +61,7 @@ def compress_cot_text(
     cot_text: str,
     ratio: float,
     model_type: str = "phi2",
-    llmlingua_model_name: str = "llmlingua-2-xlm-roberta-large-meetingbank",
+    llmlingua_model_name: str = "microsoft/llmlingua-2-xlm-roberta-large-meetingbank",
     force_reserve_digits: bool = True,
 ) -> dict:
     """
@@ -69,7 +81,16 @@ def compress_cot_text(
             "actual_ratio":      1.0,
         }
 
-    compressor = get_llmlingua(llmlingua_model_name)
+    try:
+        compressor = get_llmlingua(llmlingua_model_name)
+    except Exception as e:
+        print(f"  [tokenskip] ⚠ Cannot load LLMLingua ({e}); returning original")
+        return {
+            "compressed_cot":    cot_text,
+            "original_tokens":   len(cot_text.split()),
+            "compressed_tokens": len(cot_text.split()),
+            "actual_ratio":      1.0,
+        }
 
     kwargs: dict = {"rate": ratio, "force_reserve_digit": force_reserve_digits}
     # Llama-3 benefits from keeping step markers
@@ -99,9 +120,14 @@ def batch_compress(
     cot_texts: list[str],
     ratio: float,
     model_type: str = "phi2",
-    llmlingua_model_name: str = "llmlingua-2-xlm-roberta-large-meetingbank",
+    llmlingua_model_name: str = "microsoft/llmlingua-2-xlm-roberta-large-meetingbank",
+    device=None,
 ) -> list[dict]:
-    """Compress a batch of CoT strings. Returns one result dict per string."""
+    """Compress a batch of CoT strings. Returns one result dict per string.
+
+    `device` is accepted for backward compatibility and intentionally ignored
+    because LLMLingua PromptCompressor manages device placement internally.
+    """
     return [
         compress_cot_text(t, ratio, model_type, llmlingua_model_name)
         for t in cot_texts

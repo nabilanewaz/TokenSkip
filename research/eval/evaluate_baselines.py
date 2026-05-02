@@ -26,7 +26,7 @@ LAYER_FRAC     = _P2.get("intervention_layer_frac", 0.75)
 _split_dir     = pathlib.Path(_DS.get("out_dir","datasets/gsm8k_split"))
 DEFAULT_EVAL   = str(_split_dir / "test.jsonl")
 DEFAULT_OUT    = "outputs/eval_grid"
-DEFAULT_VEC    = "outputs/phase2_truth_vector"
+DEFAULT_VEC    = "outputs/truth_vectors"
 STEER_SCRIPT   = str(_RESEARCH_ROOT / "phase3" / "steer.py")
 
 def run_cmd(cmd, label=""):

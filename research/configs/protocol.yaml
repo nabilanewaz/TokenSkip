@@ -26,7 +26,7 @@ dataset:
   source_dir:  "datasets/gsm8k"
   out_dir:     "datasets/gsm8k_split"
 
-# ── Phase 1: Truth Vector Extraction ─────────────────────────────────────────
+# ── Phase 1: Base Model Training & Phase 2 extraction knobs ─────────────────
 phase1:
   # For each question in D_steer, run n_samples forward passes at T=1.0.
   # Traces classified H+ (correct) and H- (incorrect).
@@ -34,7 +34,7 @@ phase1:
   n_samples:    5                # 1 = greedy (fast) | >=3 = stochastic (better)
   temperature:  1.0
   use_per_step: true             # true = per-step v_truth^t | false = global mean
-  output_dir:   "outputs/phase1_truth_vector"
+  output_dir:   "outputs/truth_vectors"
 
 # ── Phase 2: Inference-Time Intervention ─────────────────────────────────────
 phase2:
@@ -94,7 +94,7 @@ eval:
 # ── TokenSkip Compression ────────────────────────────────────────────────────
 tokenskip:
   # LLMLingua-2 model for text CoT compression
-  llmlingua_model: "llmlingua-2-xlm-roberta-large-meetingbank"
+  llmlingua_model: "microsoft/llmlingua-2-xlm-roberta-large-meetingbank"
 
   # Text CoT compression ratios (1.0 = no compression = baseline)
   ratios: [0.5, 0.6, 0.7, 0.8, 0.9, 1.0]
