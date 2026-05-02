@@ -42,6 +42,26 @@ DEFAULT_TRAIN = str(pathlib.Path(_DS.get("out_dir", "datasets/gsm8k_split")) / "
 DEFAULT_OUT   = "outputs/phase1_checkpoint"
 ALL_MODEL_TYPES = ["phi2","llama32_3b","qwen25_3b","qwen25_1_5b","qwen25_0_5b"]
 
+
+def _patch_peft_torchao_guard():
+    """Prevent incompatible torchao versions from crashing PEFT LoRA injection."""
+    try:
+        import peft.import_utils as _pi
+    except Exception:
+        return
+    orig = _pi.is_torchao_available
+    def _safe_is_torchao_available():
+        try:
+            return orig()
+        except ImportError:
+            return False
+    try:
+        _safe_is_torchao_available.cache_clear = orig.cache_clear  # type: ignore[attr-defined]
+    except Exception:
+        pass
+    _pi.is_torchao_available = _safe_is_torchao_available
+
+
 def prepare_dataset(data: list[dict], tokenizer, model_type: str, ratio: float, device: torch.device):
     """Pre-compresses CoT, formats samples, and masks loss to final answer span only."""
     mcfg = get_model_cfg(model_type)
@@ -149,6 +169,7 @@ def main():
         target_modules=["q_proj", "v_proj", "k_proj", "o_proj"] if "qwen" in args.model_type or "llama" in args.model_type else ["Wqkv", "out_proj"]
     )
     
+    _patch_peft_torchao_guard()
     model = get_peft_model(model, lora_config)
     model.print_trainable_parameters()
 
