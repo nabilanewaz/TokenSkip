@@ -22,7 +22,7 @@ from time import time
 import torch
 from datasets import Dataset
 from transformers import (
-    AutoTokenizer, AutoModelForCausalLM, TrainingArguments, Trainer, DataCollatorForLanguageModeling
+    AutoTokenizer, AutoModelForCausalLM, TrainingArguments, Trainer
 )
 from peft import get_peft_model, LoraConfig, TaskType
 
@@ -43,51 +43,65 @@ DEFAULT_OUT   = "outputs/phase1_checkpoint"
 ALL_MODEL_TYPES = ["phi2","llama32_3b","qwen25_3b","qwen25_1_5b","qwen25_0_5b"]
 
 def prepare_dataset(data: list[dict], tokenizer, model_type: str, ratio: float, device: torch.device):
-    """Pre-compresses the CoT and formats the text strings for Causal LM training."""
+    """Pre-compresses CoT, formats samples, and masks loss to final answer span only."""
     mcfg = get_model_cfg(model_type)
-    
-    # Extract questions, reasoning, and answers
+
+    samples = []
     questions, reasons, answers = [], [], []
     for item in data:
         q = get_question(item)
         gt_raw = item.get("answer", "")
-        # Split GSM8K original format (Reasoning #### Answer)
         if "####" in gt_raw:
-            r_str, a_str = gt_raw.split("####")
-            r_str = r_str.strip()
-            a_str = a_str.strip()
+            r_str, a_str = gt_raw.split("####", 1)
+            r_str, a_str = r_str.strip(), a_str.strip()
         else:
-            r_str = "Let's think."
-            a_str = gt_raw.strip()
-            
-        questions.append(q)
-        reasons.append(r_str)
-        answers.append(a_str)
-        
+            r_str, a_str = "Let's think.", gt_raw.strip()
+        questions.append(q); reasons.append(r_str); answers.append(a_str)
+
     print(f"[Phase 1] Compressing {len(reasons)} reasoning chains at ratio {ratio} via TokenSkip...")
     t0 = time()
-    compressed = batch_compress(reasons, ratio, model_type, device=device)
+    # Backward/forward compatible call: some environments still pass/expect `device`.
+    try:
+        compressed = batch_compress(reasons, ratio, model_type, device=device)
+    except TypeError:
+        compressed = batch_compress(reasons, ratio, model_type)
     print(f"[Phase 1] Compression done in {time()-t0:.1f}s")
-    
-    texts = []
+
     for q, comp, ans in zip(questions, compressed, answers):
         comp_cot = comp["compressed_cot"]
-        # Format: Question -> Compressed CoT -> Answer
-        # We use build_prompt for the prefix, and append the CoT and Answer.
         prompt = mcfg["build_prompt"](q, tokenizer, ratio)
         split_token = mcfg["cot_split"]
-        
-        # Assemble the full text trajectory to train on
-        full_text = f"{prompt}{comp_cot}{split_token} {ans}{tokenizer.eos_token}"
-        texts.append(full_text)
-        
-    dataset = Dataset.from_dict({"text": texts})
-    
-    def tokenize_function(examples):
-        return tokenizer(examples["text"], truncation=True, max_length=1024)
-        
-    tokenized_dataset = dataset.map(tokenize_function, batched=True, remove_columns=["text"])
-    return tokenized_dataset
+        prefix = f"{prompt}{comp_cot}{split_token} "
+        target = f"{ans}{tokenizer.eos_token}"
+        full_text = prefix + target
+
+        tok_full = tokenizer(full_text, truncation=True, max_length=1024)
+        tok_prefix = tokenizer(prefix, truncation=True, max_length=1024, add_special_tokens=False)
+        input_ids = tok_full["input_ids"]
+        attn = tok_full["attention_mask"]
+        labels = [-100] * len(input_ids)
+        answer_start = min(len(tok_prefix["input_ids"]), len(input_ids))
+        for i in range(answer_start, len(input_ids)):
+            labels[i] = input_ids[i]
+        samples.append({"input_ids": input_ids, "attention_mask": attn, "labels": labels})
+
+    return Dataset.from_list(samples)
+
+
+def collate_causal_lm(batch: list[dict], tokenizer):
+    max_len = max(len(x["input_ids"]) for x in batch)
+    pad_id = tokenizer.pad_token_id
+    input_ids, attention_mask, labels = [], [], []
+    for x in batch:
+        pad = max_len - len(x["input_ids"])
+        input_ids.append(x["input_ids"] + [pad_id] * pad)
+        attention_mask.append(x["attention_mask"] + [0] * pad)
+        labels.append(x["labels"] + [-100] * pad)
+    return {
+        "input_ids": torch.tensor(input_ids, dtype=torch.long),
+        "attention_mask": torch.tensor(attention_mask, dtype=torch.long),
+        "labels": torch.tensor(labels, dtype=torch.long),
+    }
 
 def main():
     p = argparse.ArgumentParser(description="Phase 1: TokenSkip CCoT LoRA Fine-Tuning")
@@ -157,7 +171,7 @@ def main():
         report_to="none"
     )
 
-    collator = DataCollatorForLanguageModeling(tokenizer=tokenizer, mlm=False)
+    collator = lambda batch: collate_causal_lm(batch, tokenizer)
 
     trainer = Trainer(
         model=model,
