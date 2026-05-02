@@ -27,6 +27,7 @@ def get_llmlingua(model_name: str = "microsoft/llmlingua-2-xlm-roberta-large-mee
     Lazy-load and cache a LLMLingua-2 PromptCompressor.
     Safe to call multiple times — returns the cached instance.
     """
+    model_name = _normalize_llmlingua_model_name(model_name)
     global _LLMLINGUA_MODEL, _LLMLINGUA_NAME
     if _LLMLINGUA_MODEL is not None and _LLMLINGUA_NAME == model_name:
         return _LLMLINGUA_MODEL

@@ -51,7 +51,7 @@ DEFAULT_VEC_ROOT   = "outputs/truth_vectors"
 DEFAULT_OUT        = "outputs/phase2_results/default"
 PROTOCOL_ALPHAS    = _P2.get("alpha_sweep", [0.0,0.1,0.5,1.0,2.0,5.0,10.0,20.0,50.0])
 PROTOCOL_RATIOS    = _TS.get("ratios",      [0.5,0.6,0.7,0.8,0.9,1.0])
-LLMLINGUA_MODEL    = _TS.get("llmlingua_model", "llmlingua-2-xlm-roberta-large-meetingbank")
+LLMLINGUA_MODEL    = _TS.get("llmlingua_model", "microsoft/llmlingua-2-xlm-roberta-large-meetingbank")
 ALL_MODEL_TYPES    = ["phi2","llama32_3b","qwen25_3b","qwen25_1_5b","qwen25_0_5b"]
 CONDITIONS         = ["no_cot", "text_cot", "ccot", "random_noise", "steered"]
 
