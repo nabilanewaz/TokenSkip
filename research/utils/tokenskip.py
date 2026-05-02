@@ -111,7 +111,7 @@ def batch_compress(
     cot_texts: list[str],
     ratio: float,
     model_type: str = "phi2",
-    llmlingua_model_name: str = "microsoft/llmlingua-2-xlm-roberta-large-meetingbank",
+    llmlingua_model_name: str = "llmlingua-2-xlm-roberta-large-meetingbank",
     device=None,
 ) -> list[dict]:
     """Compress a batch of CoT strings. Returns one result dict per string.
