@@ -60,7 +60,7 @@ def prepare_dataset(data: list[dict], tokenizer, model_type: str, ratio: float, 
 
     print(f"[Phase 1] Compressing {len(reasons)} reasoning chains at ratio {ratio} via TokenSkip...")
     t0 = time()
-    compressed = batch_compress(reasons, ratio, model_type, device=device)
+    compressed = batch_compress(reasons, ratio, model_type)
     print(f"[Phase 1] Compression done in {time()-t0:.1f}s")
 
     for q, comp, ans in zip(questions, compressed, answers):
