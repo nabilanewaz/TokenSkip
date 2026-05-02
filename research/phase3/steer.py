@@ -47,7 +47,7 @@ _DS  = _CFG.get("dataset", {})
 
 _split_dir         = pathlib.Path(_DS.get("out_dir", "datasets/gsm8k_split"))
 DEFAULT_EVAL       = str(_split_dir / "test.jsonl")
-DEFAULT_VEC_ROOT   = "outputs/phase1_truth_vector"
+DEFAULT_VEC_ROOT   = "outputs/truth_vectors"
 DEFAULT_OUT        = "outputs/phase2_results/default"
 PROTOCOL_ALPHAS    = _P2.get("alpha_sweep", [0.0,0.1,0.5,1.0,2.0,5.0,10.0,20.0,50.0])
 PROTOCOL_RATIOS    = _TS.get("ratios",      [0.5,0.6,0.7,0.8,0.9,1.0])
