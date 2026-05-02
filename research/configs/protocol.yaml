@@ -36,7 +36,7 @@ phase1:
   use_per_step: true             # true = per-step v_truth^t | false = global mean
   output_dir:   "outputs/truth_vectors"
 
-# ── Phase 2: Inference-Time Intervention ─────────────────────────────────────
+# ── Phase 3: Inference-Time Intervention ─────────────────────────────────────
 phase2:
   # Steering equation: h_{t+1} = Model(h_t) + α · σ_l · v̂_truth
   #

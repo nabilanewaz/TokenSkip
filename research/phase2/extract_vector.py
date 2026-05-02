@@ -91,8 +91,7 @@ def extract_truth_vector(model, tokenizer, model_type, steer_data_path, hook_lay
     hook.register(hook_layer)
 
     pos_h, neg_h = [], []
-    pos_step_sums, neg_step_sums = {}, {}
-    pos_step_counts, neg_step_counts = {}, {}
+    pos_steps, neg_steps = {}, {}
     n_total = len(steer_data)
 
     print(f"\n[Phase 2] Extracting v_truth from {n_total} questions x {n_samples} samples...")
@@ -106,15 +105,8 @@ def extract_truth_vector(model, tokenizer, model_type, steer_data_path, hook_lay
 
         for _ in range(n_samples):
             hook.reset()
-            gen_kwargs = {
-                "max_new_tokens": max_new,
-                "pad_token_id": tokenizer.pad_token_id,
-                "do_sample": (n_samples > 1),
-            }
-            if n_samples > 1:
-                gen_kwargs["temperature"] = temperature
             with torch.no_grad():
-                out = model.generate(**enc, **gen_kwargs)
+                out = model.generate(**enc, max_new_tokens=max_new, do_sample=True, temperature=temperature, pad_token_id=tokenizer.pad_token_id)
             if not hook.hidden_steps:
                 continue
 
@@ -123,15 +115,10 @@ def extract_truth_vector(model, tokenizer, model_type, steer_data_path, hook_lay
             is_pos = answers_match(pred_text, gt)
             (pos_h if is_pos else neg_h).append(traj.mean(dim=0, keepdim=True))
 
+            bucket = pos_steps if is_pos else neg_steps
             if use_per_step:
                 for t in range(traj.shape[0]):
-                    step_vec = traj[t]
-                    if is_pos:
-                        pos_step_sums[t] = pos_step_sums.get(t, torch.zeros_like(step_vec)) + step_vec
-                        pos_step_counts[t] = pos_step_counts.get(t, 0) + 1
-                    else:
-                        neg_step_sums[t] = neg_step_sums.get(t, torch.zeros_like(step_vec)) + step_vec
-                        neg_step_counts[t] = neg_step_counts.get(t, 0) + 1
+                    bucket.setdefault(t, []).append(traj[t:t+1])
 
         if (i+1) % 50 == 0 or (i+1) == n_total:
             print(f"  [{i+1}/{n_total}] H+: {len(pos_h)}  H-: {len(neg_h)}")
@@ -149,12 +136,10 @@ def extract_truth_vector(model, tokenizer, model_type, steer_data_path, hook_lay
 
     per_step = {}
     if use_per_step:
-        common_steps = sorted(set(pos_step_sums.keys()) & set(neg_step_sums.keys()))
+        common_steps = sorted(set(pos_steps.keys()) & set(neg_steps.keys()))
         for t in common_steps:
-            if pos_step_counts.get(t, 0) == 0 or neg_step_counts.get(t, 0) == 0:
-                continue
-            p = pos_step_sums[t] / pos_step_counts[t]
-            n = neg_step_sums[t] / neg_step_counts[t]
+            p = torch.cat(pos_steps[t], dim=0).float().mean(dim=0)
+            n = torch.cat(neg_steps[t], dim=0).float().mean(dim=0)
             per_step[str(t)] = F.normalize((p - n).unsqueeze(0), dim=-1).squeeze(0)
 
     all_stack = torch.cat([pos_stack, neg_stack], dim=0)
