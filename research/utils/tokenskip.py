@@ -22,7 +22,7 @@ _LLMLINGUA_MODEL: Optional[object] = None
 _LLMLINGUA_NAME:  Optional[str]    = None
 
 
-def get_llmlingua(model_name: str = "llmlingua-2-xlm-roberta-large-meetingbank"):
+def get_llmlingua(model_name: str = "microsoft/llmlingua-2-xlm-roberta-large-meetingbank"):
     """
     Lazy-load and cache a LLMLingua-2 PromptCompressor.
     Safe to call multiple times — returns the cached instance.
@@ -37,10 +37,13 @@ def get_llmlingua(model_name: str = "llmlingua-2-xlm-roberta-large-meetingbank")
             "LLMLingua is required for TokenSkip: pip install llmlingua"
         )
     print(f"  [tokenskip] Loading LLMLingua-2 compressor: {model_name} …")
-    _LLMLINGUA_MODEL = PromptCompressor(model_name=model_name, use_llmlingua2=True)
-    _LLMLINGUA_NAME  = model_name
-    print(f"  [tokenskip] ✓ Compressor ready")
-    return _LLMLINGUA_MODEL
+    try:
+        _LLMLINGUA_MODEL = PromptCompressor(model_name=model_name, use_llmlingua2=True)
+        _LLMLINGUA_NAME = model_name
+        print("  [tokenskip] ✓ Compressor ready")
+        return _LLMLINGUA_MODEL
+    except Exception as e:
+        raise RuntimeError(f"Failed to load LLMLingua model '{model_name}': {e}") from e
 
 
 # ── Text CoT compression ──────────────────────────────────────────────────────
@@ -49,7 +52,7 @@ def compress_cot_text(
     cot_text: str,
     ratio: float,
     model_type: str = "phi2",
-    llmlingua_model_name: str = "llmlingua-2-xlm-roberta-large-meetingbank",
+    llmlingua_model_name: str = "microsoft/llmlingua-2-xlm-roberta-large-meetingbank",
     force_reserve_digits: bool = True,
 ) -> dict:
     """
@@ -69,7 +72,16 @@ def compress_cot_text(
             "actual_ratio":      1.0,
         }
 
-    compressor = get_llmlingua(llmlingua_model_name)
+    try:
+        compressor = get_llmlingua(llmlingua_model_name)
+    except Exception as e:
+        print(f"  [tokenskip] ⚠ Cannot load LLMLingua ({e}); returning original")
+        return {
+            "compressed_cot":    cot_text,
+            "original_tokens":   len(cot_text.split()),
+            "compressed_tokens": len(cot_text.split()),
+            "actual_ratio":      1.0,
+        }
 
     kwargs: dict = {"rate": ratio, "force_reserve_digit": force_reserve_digits}
     # Llama-3 benefits from keeping step markers

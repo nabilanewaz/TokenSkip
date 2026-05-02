@@ -94,7 +94,7 @@ eval:
 # ── TokenSkip Compression ────────────────────────────────────────────────────
 tokenskip:
   # LLMLingua-2 model for text CoT compression
-  llmlingua_model: "llmlingua-2-xlm-roberta-large-meetingbank"
+  llmlingua_model: "microsoft/llmlingua-2-xlm-roberta-large-meetingbank"
 
   # Text CoT compression ratios (1.0 = no compression = baseline)
   ratios: [0.5, 0.6, 0.7, 0.8, 0.9, 1.0]
