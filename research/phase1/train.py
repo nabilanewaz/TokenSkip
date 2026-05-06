@@ -151,7 +151,7 @@ def main():
     if tokenizer.pad_token is None:
         tokenizer.pad_token = tokenizer.eos_token
         
-    train_dataset = prepare_dataset(raw_data, tokenizer, args.model_type, args.ratio, device)
+    train_dataset = prepare_dataset(raw_data, tokenizer, args.model_type, args.ratio)
 
     dtype = torch.bfloat16 if device.type == "cuda" and torch.cuda.is_bf16_supported() else torch.float16 if device.type == "cuda" else torch.float32
     
